@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environment
+.venv/
+
+# Environment
+.env
+.env.example
+
+# IDE
+.idea/
+.vscode/
+vcs.xml
+
+# Runtime data
+data/
+
+# Logs
+*.log

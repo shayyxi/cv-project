@@ -1,0 +1,18 @@
+from enum import Enum
+
+
+class ImageStatus(str, Enum):
+    DISCOVERED = "DISCOVERED"
+    DOWNLOADING = "DOWNLOADING"
+    DOWNLOADED = "DOWNLOADED"
+    VALIDATING = "VALIDATING"
+    PROCESSING = "PROCESSING"
+    PROCESSED = "PROCESSED"
+    DELIVERED = "DELIVERED"
+    FAILED = "FAILED"
+
+
+class DeliveryStatus(str, Enum):
+    PENDING = "PENDING"
+    DELIVERED = "DELIVERED"
+    FAILED = "FAILED"
