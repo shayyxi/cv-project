@@ -53,4 +53,4 @@ class ImageJob(Base):
         onupdate=datetime.utcnow,
     )
 
-    detections = relationship("Detection", back_populates="image_job")
+    detections = relationship("Detection", back_populates="image_job", cascade="all, delete-orphan")

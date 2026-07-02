@@ -1,16 +1,18 @@
+from sqlalchemy import text
+
 from app.storage.database import SessionLocal
-from app.storage.repositories.image_job_repository import ImageJobRepository
 
 
 def main() -> None:
     session = SessionLocal()
 
     try:
-        repository = ImageJobRepository(session)
+        session.execute(
+            text("TRUNCATE TABLE image_jobs RESTART IDENTITY CASCADE")
+        )
+        session.commit()
 
-        deleted = repository.delete_all()
-
-        print(f"Deleted {deleted} image jobs.")
+        print("Database cleared successfully.")
 
     finally:
         session.close()

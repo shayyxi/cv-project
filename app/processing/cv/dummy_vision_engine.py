@@ -1,18 +1,9 @@
-from pathlib import Path
-
 from app.dto import BoundingBoxDTO, VisionDetectionDTO, VisionResultDTO
+from app.processing.cv.vision_engine import VisionEngine
 
 
-class VisionEngine:
-    def process_image(self, image_path: Path) -> VisionResultDTO:
-        raise NotImplementedError
-
-# dummy implementation, would be implemented by CV algo
 class DummyVisionEngine(VisionEngine):
-    def process_image(self, image_path: Path) -> VisionResultDTO:
-        if not image_path.exists():
-            raise FileNotFoundError(f"Image not found: {image_path}")
-
+    def process_image(self, image_bytes: bytes) -> VisionResultDTO:
         return VisionResultDTO(
             worker_count=1,
             detections=[
