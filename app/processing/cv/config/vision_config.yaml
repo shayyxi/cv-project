@@ -1,0 +1,51 @@
+device:
+  prefer_cuda: true
+
+
+models:
+
+  person:
+    path: "weights/yolov8x.pt"
+    confidence: 0.7
+
+  ppe:
+    path: "weights/best.pt"
+    confidence: 0.25
+
+
+classes:
+
+  ppe:
+    helmet: "helmet"
+    vest: "safety vest"
+    boots: "safety boots"
+
+
+sahi:
+
+  num_cols: 4
+  num_rows: 3
+
+  overlap_width: 0.20
+  overlap_height: 0.20
+
+  merge_iou: 0.45
+
+
+crop:
+
+  width: 512
+  height: 640
+
+  scale_padding: 1.40
+
+
+colors:
+
+  compliant: [0, 255, 0]
+  non_compliant: [0, 0, 255]
+
+  ppe:
+    helmet: [0, 255, 0]
+    safety_vest: [0, 165, 255]
+    safety_boots: [255, 0, 255]
