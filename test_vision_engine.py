@@ -6,6 +6,7 @@ import cv2
 
 from app.processing.cv.ppe_vision_engine import PPEVisionEngine
 from app.processing.cv.Vision_renderer import VisionRenderer
+from app.processing.privacy.face_blur_service import FaceBlurPrivacyService
 
 
 # ============================================================
@@ -71,6 +72,7 @@ def main():
     # --------------------------------------------------------
 
     engine = PPEVisionEngine()
+    privacy_service = FaceBlurPrivacyService()
 
 
     # --------------------------------------------------------
@@ -79,6 +81,11 @@ def main():
 
     result = engine.process_image(
         image_bytes
+    )
+
+    privacy_image_bytes = privacy_service.apply_privacy_blur(
+        image_bytes=image_bytes,
+        vision_result=result,
     )
 
 
@@ -151,31 +158,19 @@ def main():
     # --------------------------------------------------------
 
     renderer = VisionRenderer()
-
     annotated_image = renderer.draw_original(
-        image,
-        result,
+        image_bytes=privacy_image_bytes,
+        result=result,
     )
+
 
 
     # --------------------------------------------------------
     # 7. Save annotated image
     # --------------------------------------------------------
 
-    success = cv2.imwrite(
-        str(OUTPUT_PATH),
-        annotated_image,
-        [
-            cv2.IMWRITE_JPEG_QUALITY,
-            95,
-        ],
-    )
-
-    if not success:
-        raise RuntimeError(
-            f"Failed to save output image: "
-            f"{OUTPUT_PATH}"
-        )
+    with open(OUTPUT_PATH, "wb") as f:
+        f.write(annotated_image)
 
     print(
         f"\nAnnotated image saved to:\n"

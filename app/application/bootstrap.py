@@ -11,9 +11,9 @@ from app.storage.repositories.image_job_repository import ImageJobRepository
 from app.application.pipeline_orchestrator import (
     PipelineOrchestrator,
 )
-from app.processing.cv import DummyVisionEngine
+from app.processing.cv import PPEVisionEngine, VisionRenderer
 from app.processing.image_validator import ImageValidator
-from app.processing.privacy import DummyPrivacyService
+from app.processing.privacy import DummyPrivacyService, FaceBlurPrivacyService
 from app.processing.processing_service import ProcessingService
 
 
@@ -49,9 +49,11 @@ class Application:
         self.detection_repository = DetectionRepository(self.db)
 
         self.image_validator = ImageValidator()
-        self.vision_engine = DummyVisionEngine() #This changes when the real cv implementation is done
-        self.privacy_service = DummyPrivacyService() # This changes when the real cv implementation is done
-
+        #self.vision_engine = DummyVisionEngine() #This changes when the real cv implementation is done
+        self.vision_engine = PPEVisionEngine()
+        #self.privacy_service = DummyPrivacyService() # This changes when the real cv implementation is done
+        self.privacy_service=FaceBlurPrivacyService()
+        self.vision_renderer=VisionRenderer()
 
         self.processing_service = ProcessingService(
             object_storage=self.storage,
@@ -60,6 +62,7 @@ class Application:
             image_validator=self.image_validator,
             vision_engine=self.vision_engine,
             privacy_service=self.privacy_service,
+            vision_renderer=self.vision_renderer,
         )
 
         self.pipeline = PipelineOrchestrator(

@@ -40,15 +40,30 @@ class VisionRenderer:
     # ==================================================================
 
     def draw_original(
-        self,
-        image: np.ndarray,
-        result,
-    ) -> np.ndarray:
+            self,
+            image_bytes: bytes,
+            result,
+    ) -> bytes:
+
+        # Decode image bytes to OpenCV image
+        image_array = np.frombuffer(
+            image_bytes,
+            dtype=np.uint8,
+        )
+
+        image = cv2.imdecode(
+            image_array,
+            cv2.IMREAD_COLOR,
+        )
+
+        if image is None:
+            raise ValueError(
+                "Could not decode image bytes."
+            )
 
         annotated = image.copy()
 
         for person in result.detections:
-
             self._draw_person(
                 annotated,
                 person,
@@ -59,7 +74,22 @@ class VisionRenderer:
                 person,
             )
 
-        return annotated
+        # Encode annotated image back to bytes
+        success, encoded = cv2.imencode(
+            ".jpg",
+            annotated,
+            [
+                cv2.IMWRITE_JPEG_QUALITY,
+                95,
+            ],
+        )
+
+        if not success:
+            raise ValueError(
+                "Could not encode annotated image."
+            )
+
+        return encoded.tobytes()
 
     def draw_crop(
         self,
