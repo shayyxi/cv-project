@@ -1,5 +1,4 @@
 from app.processing.privacy.privacy_service import PrivacyService
-from abc import ABC, abstractmethod
 
 import cv2
 import numpy as np

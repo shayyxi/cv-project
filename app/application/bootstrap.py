@@ -13,7 +13,7 @@ from app.application.pipeline_orchestrator import (
 )
 from app.processing.cv import PPEVisionEngine, VisionRenderer
 from app.processing.image_validator import ImageValidator
-from app.processing.privacy import DummyPrivacyService, FaceBlurPrivacyService
+from app.processing.privacy import FaceBlurPrivacyService
 from app.processing.processing_service import ProcessingService
 
 
