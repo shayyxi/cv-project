@@ -1,7 +1,7 @@
 import logging
 import time
 
-from app.processing.cv import VisionEngine
+from app.processing.cv import VisionEngine, VisionRenderer
 from app.processing.image_validator import ImageValidator
 from app.processing.privacy import PrivacyService
 from app.storage.models.image_job import ImageJob
@@ -21,6 +21,7 @@ class ProcessingService:
         image_validator: ImageValidator,
         vision_engine: VisionEngine,
         privacy_service: PrivacyService,
+        vision_renderer: VisionRenderer,
     ) -> None:
         self._object_storage = object_storage
         self._image_job_repository = image_job_repository
@@ -28,6 +29,7 @@ class ProcessingService:
         self._image_validator = image_validator
         self._vision_engine = vision_engine
         self._privacy_service = privacy_service
+        self._vision_renderer = vision_renderer
 
     def process_next(self) -> bool:
         image_job = self._image_job_repository.get_next_downloaded()
@@ -57,10 +59,17 @@ class ProcessingService:
 
             self._image_validator.validate(raw_image_bytes)
 
-            vision_result = self._vision_engine.process_image(raw_image_bytes)
+            vision_result = self._vision_engine.process_image(
+                raw_image_bytes
+            )
+
+            annotated_image_bytes = self._vision_renderer.draw_original(
+                image_bytes=raw_image_bytes,
+                result=vision_result,
+            )
 
             processed_image_bytes = self._privacy_service.apply_privacy_blur(
-                image_bytes=raw_image_bytes,
+                image_bytes=annotated_image_bytes,
                 vision_result=vision_result,
             )
 

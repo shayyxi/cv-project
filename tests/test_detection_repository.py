@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.dto import (
     BoundingBoxDTO,
+    ComplianceDTO,
     VisionDetectionDTO,
 )
 from app.storage.repositories.detection_repository import DetectionRepository
@@ -24,15 +25,28 @@ def test_create_many_detections(db_session: Session) -> None:
 
     detections = [
         VisionDetectionDTO(
-            label="face",
+            person_id=0,
+            label="person",
             confidence=0.95,
-            box=BoundingBoxDTO(x_min=10, y_min=20, x_max=100, y_max=120),
-            is_sensitive=True,
+            box=BoundingBoxDTO(
+                x_min=10,
+                y_min=20,
+                x_max=100,
+                y_max=120,
+            ),
+            is_sensitive=False,
+            compliance=ComplianceDTO(
+                helmet=True,
+                vest=False,
+                boots=True,
+                compliant=False,
+            ),
+            ppe=[],
         )
     ]
 
     saved = detection_repo.create_many(job.id, detections)
 
     assert len(saved) == 1
-    assert saved[0].label == "face"
-    assert saved[0].is_sensitive is True
+    assert saved[0].label == "person"
+    assert saved[0].is_sensitive is False

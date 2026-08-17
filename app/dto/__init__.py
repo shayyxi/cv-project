@@ -1,9 +1,17 @@
 from app.dto.http import DownloadedImageDTO
-from app.dto.vision import BoundingBoxDTO, VisionDetectionDTO, VisionResultDTO
+from app.dto.ppe_vision import (
+    BoundingBoxDTO,
+    ComplianceDTO,
+    PPEDetectionDTO,
+    VisionDetectionDTO,
+    VisionResultDTO,
+)
 
 __all__ = [
-    "DownloadedImageDTO",
     "BoundingBoxDTO",
+    "ComplianceDTO",
+    "DownloadedImageDTO",
+    "PPEDetectionDTO",
     "VisionDetectionDTO",
     "VisionResultDTO",
 ]

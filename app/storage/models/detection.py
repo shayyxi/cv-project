@@ -28,3 +28,28 @@ class Detection(Base):
     is_sensitive: Mapped[bool] = mapped_column(Boolean, default=False)
 
     image_job = relationship("ImageJob", back_populates="detections")
+
+    person_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    helmet_compliant: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    vest_compliant: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    boots_compliant: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    is_compliant: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )

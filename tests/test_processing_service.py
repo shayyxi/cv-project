@@ -3,9 +3,9 @@ from unittest.mock import create_autospec
 from app.dto import (
     BoundingBoxDTO,
     VisionDetectionDTO,
-    VisionResultDTO,
+    VisionResultDTO, ComplianceDTO,
 )
-from app.processing.cv import VisionEngine
+from app.processing.cv import VisionEngine, VisionRenderer
 from app.processing.image_validator import ImageValidator
 from app.processing.processing_service import ProcessingService
 from app.processing.privacy import PrivacyService
@@ -36,6 +36,7 @@ def create_processing_service() -> tuple[
     ImageValidator,
     VisionEngine,
     PrivacyService,
+    VisionRenderer,
 ]:
     object_storage = create_autospec(ObjectStorage)
     image_job_repository = create_autospec(ImageJobRepository)
@@ -43,6 +44,7 @@ def create_processing_service() -> tuple[
     image_validator = create_autospec(ImageValidator)
     vision_engine = create_autospec(VisionEngine)
     privacy_service = create_autospec(PrivacyService)
+    vision_renderer = create_autospec(VisionRenderer)
 
     service = ProcessingService(
         object_storage=object_storage,
@@ -51,6 +53,7 @@ def create_processing_service() -> tuple[
         image_validator=image_validator,
         vision_engine=vision_engine,
         privacy_service=privacy_service,
+        vision_renderer=vision_renderer,
     )
 
     return (
@@ -61,6 +64,7 @@ def create_processing_service() -> tuple[
         image_validator,
         vision_engine,
         privacy_service,
+        vision_renderer,
     )
 
 
@@ -69,6 +73,7 @@ def test_process_next_returns_false_when_no_jobs() -> None:
         service,
         _,
         image_job_repository,
+        _,
         _,
         _,
         _,
@@ -93,6 +98,7 @@ def test_process_next_processes_image_job() -> None:
         image_validator,
         vision_engine,
         privacy_service,
+        vision_renderer,
     ) = create_processing_service()
 
     image_job = create_image_job()
@@ -108,6 +114,7 @@ def test_process_next_processes_image_job() -> None:
         worker_count=1,
         detections=[
             VisionDetectionDTO(
+                person_id=0,
                 label="person",
                 confidence=0.95,
                 box=BoundingBoxDTO(
@@ -116,12 +123,20 @@ def test_process_next_processes_image_job() -> None:
                     x_max=100,
                     y_max=200,
                 ),
+                compliance=ComplianceDTO(
+                    helmet=True,
+                    vest=False,
+                    boots=False,
+                    compliant=False,
+                ),
                 is_sensitive=False,
             )
         ],
     )
 
     vision_engine.process_image.return_value = vision_result
+
+    vision_renderer.draw_original.return_value = (b"annotated-image")
 
     privacy_service.apply_privacy_blur.return_value = processed_bytes
 
@@ -145,14 +160,9 @@ def test_process_next_processes_image_job() -> None:
 
     vision_engine.process_image.assert_called_once_with(raw_bytes)
 
-    privacy_service.apply_privacy_blur.assert_called_once_with(
-        image_bytes=raw_bytes,
-        vision_result=vision_result,
-    )
-
     object_storage.save_processed_image.assert_called_once_with(
         camera_id="6168",
-        image_bytes=processed_bytes,
+        image_bytes=b"processed-image",
     )
 
     detection_repository.create_many.assert_called_once_with(
@@ -162,12 +172,23 @@ def test_process_next_processes_image_job() -> None:
 
     image_job_repository.mark_processed.assert_called_once()
 
+    privacy_service.apply_privacy_blur.assert_called_once_with(
+        image_bytes=b"annotated-image",
+        vision_result=vision_result,
+    )
+
+    vision_renderer.draw_original.assert_called_once_with(
+        image_bytes=raw_bytes,
+        result=vision_result,
+    )
+
 
 def test_process_next_marks_job_failed_on_exception() -> None:
     (
         service,
         object_storage,
         image_job_repository,
+        _,
         _,
         _,
         _,
