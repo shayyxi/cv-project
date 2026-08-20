@@ -23,6 +23,8 @@ from app.processing.cv.vision_engine import VisionEngine
 class PPEVisionEngine(VisionEngine):
 
     def __init__(self):
+        torch.backends.mkldnn.enabled = False
+        torch.set_num_threads(2)
         self._config = self._load_config()
         self._device = self._select_device()
 
