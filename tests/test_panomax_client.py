@@ -14,13 +14,13 @@ def test_build_latest_image_url() -> None:
 
     url = client.build_latest_image_url("6168")
 
-    assert url == "https://live-image.panomax.com/cams/6168/recent_thumb.jpg"
+    assert url == "https://live-image.panomax.com/cams/6168/recent_full.jpg"
 
 
 def test_download_latest_image() -> None:
     http_client = Mock()
     http_client.download_image.return_value = DownloadedImageDTO(
-        url="https://live-image.panomax.com/cams/6168/recent_thumb.jpg",
+        url="https://live-image.panomax.com/cams/6168/recent_full.jpg",
         content=b"image-bytes",
         content_type="image/jpeg",
         content_length=11,
@@ -34,13 +34,13 @@ def test_download_latest_image() -> None:
 
     assert result.content == b"image-bytes"
     http_client.download_image.assert_called_once_with(
-        "https://live-image.panomax.com/cams/6168/recent_thumb.jpg"
+        "https://live-image.panomax.com/cams/6168/recent_full.jpg"
     )
 
 def test_download_latest_image_rejects_empty_content() -> None:
     http_client = Mock()
     http_client.download_image.return_value = DownloadedImageDTO(
-        url="https://live-image.panomax.com/cams/6168/recent_thumb.jpg",
+        url="https://live-image.panomax.com/cams/6168/recent_full.jpg",
         content=b"",
         content_type="image/jpeg",
         content_length=0,

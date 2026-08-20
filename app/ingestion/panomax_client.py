@@ -10,7 +10,7 @@ class PanomaxClient:
         self._http_client = http_client
 
     def build_latest_image_url(self, camera_id: str) -> str:
-        return f"{self.BASE_URL}/cams/{camera_id}/recent_thumb.jpg"
+        return f"{self.BASE_URL}/cams/{camera_id}/recent_full.jpg"
 
     def download_latest_image(self, camera_id: str) -> DownloadedImageDTO:
         url = self.build_latest_image_url(camera_id)
