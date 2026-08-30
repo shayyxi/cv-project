@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import torch
 import yaml
-
+import math
 from sahi import AutoDetectionModel
 from sahi.predict import get_sliced_prediction
 from ultralytics import YOLO
@@ -213,37 +213,45 @@ class PPEVisionEngine(VisionEngine):
         sahi = self._config["sahi"]
 
         self._num_cols = int(
-            sahi.get("num_cols", 4)
+            sahi.get("num_cols")
         )
 
         self._num_rows = int(
-            sahi.get("num_rows", 3)
+            sahi.get("num_rows")
         )
 
+
         self._overlap_width = float(
-            sahi.get("overlap_width", 0.2)
+            sahi.get("overlap_width")
         )
 
         self._overlap_height = float(
-            sahi.get("overlap_height", 0.2)
+            sahi.get("overlap_height")
         )
 
         self._merge_iou = float(
-            sahi.get("merge_iou", 0.45)
+            sahi.get("merge_iou")
         )
+
+        self._target_size = int(
+            sahi.get("target_size")
+        )
+        self._overlap=float(sahi.get("overlap"))
+
+
 
         crop = self._config["crop"]
 
         self._crop_width = int(
-            crop.get("width", 512)
+            crop.get("width")
         )
 
         self._crop_height = int(
-            crop.get("height", 640)
+            crop.get("height")
         )
 
         self._scale_padding = float(
-            crop.get("scale_padding", 1.4)
+            crop.get("scale_padding")
         )
 
         classes = self._config["classes"]["ppe"]
@@ -304,6 +312,33 @@ class PPEVisionEngine(VisionEngine):
 
         return image
 
+    def _optimal_slice_size(self,dim, target_size, overlap):
+
+        stride_guess = target_size * (1 - overlap)
+        n_guess = max(1, round((dim - target_size) / stride_guess) + 1)
+
+        best_n, best_size, best_diff = None, None, float("inf")
+
+        # Check a small neighborhood around the guess to find the best fit
+        for n in range(max(1, n_guess - 2), n_guess + 3):
+            denom = n - (n - 1) * overlap
+            if denom <= 0:
+                continue
+            size = dim / denom
+            diff = abs(size - target_size)
+            if diff < best_diff:
+                best_n, best_size, best_diff = n, size, diff
+
+        return math.ceil(best_size), best_n
+
+
+    def _get_optimal_slice_params(self,image_width, image_height, target_size, overlap):
+        slice_w, num_cols = self._optimal_slice_size(image_width, target_size, overlap)
+        slice_h, num_rows = self._optimal_slice_size(image_height, target_size, overlap)
+
+
+        return slice_w, slice_h
+
 
     def _detect_persons(
         self,
@@ -312,23 +347,25 @@ class PPEVisionEngine(VisionEngine):
 
         height, width = image.shape[:2]
 
-        slice_width = max(
-            1,
-            width // self._num_cols,
-        )
+        #slice_width = max(
+         #   1,
+          #  width // self._num_cols,
+        #)
 
-        slice_height = max(
-            1,
-            height // self._num_rows,
-        )
+        #slice_height = max(
+         #   1,
+          #  height // self._num_rows,
+        #)
+
+        slice_width,slice_height=self._get_optimal_slice_params(width,height,self._target_size,self._overlap)
 
         result = get_sliced_prediction(
             image,
             self._person_model,
             slice_height=slice_height,
             slice_width=slice_width,
-            overlap_height_ratio=self._overlap_height,
-            overlap_width_ratio=self._overlap_width,
+            overlap_height_ratio=self._overlap,
+            overlap_width_ratio=self._overlap,
             perform_standard_pred=False,
         )
 

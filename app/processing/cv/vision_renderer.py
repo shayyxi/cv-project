@@ -45,7 +45,6 @@ class VisionRenderer:
             result,
     ) -> bytes:
 
-        # Decode image bytes to OpenCV image
         image_array = np.frombuffer(
             image_bytes,
             dtype=np.uint8,
@@ -63,6 +62,13 @@ class VisionRenderer:
 
         annotated = image.copy()
 
+        # Draw detection region first
+        self._draw_processing_region(
+            annotated,
+            result,
+        )
+
+        # Then draw people and PPE
         for person in result.detections:
             self._draw_person(
                 annotated,
@@ -74,7 +80,6 @@ class VisionRenderer:
                 person,
             )
 
-        # Encode annotated image back to bytes
         success, encoded = cv2.imencode(
             ".jpg",
             annotated,
@@ -136,6 +141,51 @@ class VisionRenderer:
 
         return annotated
 
+    def _draw_processing_region(
+            self,
+            image,
+            result,
+    ):
+        region = result.processing_region
+
+        if region is None:
+            return
+
+        if not region.polygon:
+            return
+
+        polygon = np.array(
+            [
+                [point.x, point.y]
+                for point in region.polygon
+            ],
+            dtype=np.int32,
+        )
+
+        region_color = (255, 0, 0)
+
+        # Draw the actual polygon boundary
+        cv2.polylines(
+            image,
+            [polygon],
+            isClosed=True,
+            color=region_color,
+            thickness=5,
+        )
+
+        # Label near the first polygon point
+        x = int(polygon[0][0])
+        y = int(polygon[0][1])
+
+        self._draw_label(
+            image,
+            "DETECTION REGION",
+            x,
+            max(y - 10, 25),
+            region_color,
+            scale=0.8,
+            thickness=2,
+        )
 
     def _draw_person(
         self,

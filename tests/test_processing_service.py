@@ -14,6 +14,7 @@ from app.storage.models.enums import ImageStatus
 from app.storage.object_storage import ObjectStorage
 from app.storage.repositories.detection_repository import DetectionRepository
 from app.storage.repositories.image_job_repository import ImageJobRepository
+from app.processing.Image_cropper import ImageCropper
 
 
 def create_image_job() -> ImageJob:
@@ -37,6 +38,7 @@ def create_processing_service() -> tuple[
     VisionEngine,
     PrivacyService,
     VisionRenderer,
+    ImageCropper,
 ]:
     object_storage = create_autospec(ObjectStorage)
     image_job_repository = create_autospec(ImageJobRepository)
@@ -45,6 +47,7 @@ def create_processing_service() -> tuple[
     vision_engine = create_autospec(VisionEngine)
     privacy_service = create_autospec(PrivacyService)
     vision_renderer = create_autospec(VisionRenderer)
+    image_cropper = create_autospec(ImageCropper)
 
     service = ProcessingService(
         object_storage=object_storage,
@@ -54,6 +57,7 @@ def create_processing_service() -> tuple[
         vision_engine=vision_engine,
         privacy_service=privacy_service,
         vision_renderer=vision_renderer,
+        image_cropper=image_cropper,
     )
 
     return (
@@ -65,6 +69,7 @@ def create_processing_service() -> tuple[
         vision_engine,
         privacy_service,
         vision_renderer,
+        image_cropper,
     )
 
 
@@ -73,6 +78,7 @@ def test_process_next_returns_false_when_no_jobs() -> None:
         service,
         _,
         image_job_repository,
+        _,
         _,
         _,
         _,
@@ -99,6 +105,7 @@ def test_process_next_processes_image_job() -> None:
         vision_engine,
         privacy_service,
         vision_renderer,
+        image_cropper,
     ) = create_processing_service()
 
     image_job = create_image_job()
@@ -106,9 +113,18 @@ def test_process_next_processes_image_job() -> None:
     image_job_repository.get_next_downloaded.return_value = image_job
 
     raw_bytes = b"raw-image"
+    cropped_bytes = b"cropped-image"
+    annotated_bytes = b"annotated-image"
     processed_bytes = b"processed-image"
 
+    crop_region = object()
+
     object_storage.load_image.return_value = raw_bytes
+
+    image_cropper.crop.return_value = (
+        cropped_bytes,
+        crop_region,
+    )
 
     vision_result = VisionResultDTO(
         worker_count=1,
@@ -136,7 +152,11 @@ def test_process_next_processes_image_job() -> None:
 
     vision_engine.process_image.return_value = vision_result
 
-    vision_renderer.draw_original.return_value = (b"annotated-image")
+    image_cropper.translate_result_to_original.return_value = (
+        vision_result
+    )
+
+    vision_renderer.draw_original.return_value = annotated_bytes
 
     privacy_service.apply_privacy_blur.return_value = processed_bytes
 
@@ -148,46 +168,72 @@ def test_process_next_processes_image_job() -> None:
 
     assert result is True
 
+
     image_job_repository.mark_processing.assert_called_once_with(
         image_job
     )
+
 
     object_storage.load_image.assert_called_once_with(
         image_job.raw_image_path
     )
 
-    image_validator.validate.assert_called_once_with(raw_bytes)
 
-    vision_engine.process_image.assert_called_once_with(raw_bytes)
-
-    object_storage.save_processed_image.assert_called_once_with(
-        camera_id="6168",
-        image_bytes=b"processed-image",
+    image_cropper.crop.assert_called_once_with(
+        image_bytes=raw_bytes,
+        camera_id=image_job.camera_id,
     )
 
-    detection_repository.create_many.assert_called_once_with(
-        image_job_id=image_job.id,
-        detections=vision_result.detections,
+
+    image_validator.validate.assert_called_once_with(
+        cropped_bytes
     )
 
-    image_job_repository.mark_processed.assert_called_once()
 
-    privacy_service.apply_privacy_blur.assert_called_once_with(
-        image_bytes=b"annotated-image",
-        vision_result=vision_result,
+
+    vision_engine.process_image.assert_called_once_with(
+        cropped_bytes
     )
+
+
+    image_cropper.translate_result_to_original.assert_called_once_with(
+        result=vision_result,
+        crop_region=crop_region,
+    )
+
 
     vision_renderer.draw_original.assert_called_once_with(
         image_bytes=raw_bytes,
         result=vision_result,
     )
 
+    privacy_service.apply_privacy_blur.assert_called_once_with(
+        image_bytes=annotated_bytes,
+        vision_result=vision_result,
+    )
+
+
+
+    object_storage.save_processed_image.assert_called_once_with(
+        camera_id="6168",
+        image_bytes=processed_bytes,
+    )
+
+
+    detection_repository.create_many.assert_called_once_with(
+        image_job_id=image_job.id,
+        detections=vision_result.detections,
+    )
+
+
+    image_job_repository.mark_processed.assert_called_once()
 
 def test_process_next_marks_job_failed_on_exception() -> None:
     (
         service,
         object_storage,
         image_job_repository,
+        _,
         _,
         _,
         _,
