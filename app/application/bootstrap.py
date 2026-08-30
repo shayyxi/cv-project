@@ -15,6 +15,7 @@ from app.processing.cv import PPEVisionEngine, VisionRenderer
 from app.processing.image_validator import ImageValidator
 from app.processing.privacy import FaceBlurPrivacyService
 from app.processing.processing_service import ProcessingService
+from app.processing.Image_cropper import ImageCropper
 
 
 class Application:
@@ -55,6 +56,8 @@ class Application:
         self.privacy_service=FaceBlurPrivacyService()
         self.vision_renderer=VisionRenderer()
 
+        self.image_cropper = ImageCropper()
+
         self.processing_service = ProcessingService(
             object_storage=self.storage,
             image_job_repository=self.image_job_repository,
@@ -63,6 +66,7 @@ class Application:
             vision_engine=self.vision_engine,
             privacy_service=self.privacy_service,
             vision_renderer=self.vision_renderer,
+            image_cropper=self.image_cropper,
         )
 
         self.pipeline = PipelineOrchestrator(

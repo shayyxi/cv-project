@@ -8,6 +8,7 @@ from app.storage.models.image_job import ImageJob
 from app.storage.object_storage import ObjectStorage
 from app.storage.repositories.detection_repository import DetectionRepository
 from app.storage.repositories.image_job_repository import ImageJobRepository
+from app.processing.Image_cropper import ImageCropper
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ class ProcessingService:
         vision_engine: VisionEngine,
         privacy_service: PrivacyService,
         vision_renderer: VisionRenderer,
+        image_cropper: ImageCropper,
     ) -> None:
         self._object_storage = object_storage
         self._image_job_repository = image_job_repository
@@ -30,6 +32,7 @@ class ProcessingService:
         self._vision_engine = vision_engine
         self._privacy_service = privacy_service
         self._vision_renderer = vision_renderer
+        self._image_cropper = image_cropper
 
     def process_next(self) -> bool:
         image_job = self._image_job_repository.get_next_downloaded()
@@ -56,11 +59,20 @@ class ProcessingService:
             raw_image_bytes = self._object_storage.load_image(
                 image_job.raw_image_path,
             )
+            cropped_image_bytes, crop_region = self._image_cropper.crop(
+                image_bytes=raw_image_bytes,
+                camera_id=image_job.camera_id,
+            )
 
-            self._image_validator.validate(raw_image_bytes)
+            self._image_validator.validate(cropped_image_bytes)
 
             vision_result = self._vision_engine.process_image(
-                raw_image_bytes
+                cropped_image_bytes
+            )
+
+            vision_result = self._image_cropper.translate_result_to_original(
+                result=vision_result,
+                crop_region=crop_region,
             )
 
             annotated_image_bytes = self._vision_renderer.draw_original(

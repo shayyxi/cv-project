@@ -1,5 +1,7 @@
 from app.dto.http import DownloadedImageDTO
 from app.dto.ppe_vision import (
+    PointDTO,
+    ProcessingRegionDTO,
     BoundingBoxDTO,
     ComplianceDTO,
     PPEDetectionDTO,
@@ -8,6 +10,8 @@ from app.dto.ppe_vision import (
 )
 
 __all__ = [
+    "PointDTO",
+    "ProcessingRegionDTO",
     "BoundingBoxDTO",
     "ComplianceDTO",
     "DownloadedImageDTO",

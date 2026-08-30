@@ -3,6 +3,19 @@ from typing import List
 from pydantic import BaseModel, Field
 
 
+
+
+
+
+class PointDTO(BaseModel):
+    x: int
+    y: int
+
+
+class ProcessingRegionDTO(BaseModel):
+    polygon: List[PointDTO]
+
+
 class BoundingBoxDTO(BaseModel):
     x_min: int
     y_min: int
@@ -53,3 +66,4 @@ class VisionResultDTO(BaseModel):
     detections: List[VisionDetectionDTO] = Field(
         default_factory=list
     )
+    processing_region: ProcessingRegionDTO | None = None
