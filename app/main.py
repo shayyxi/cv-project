@@ -20,6 +20,7 @@ def main() -> None:
 
     runner = ApplicationRunner(
         pipeline=application.pipeline,
+        analytics_jobs=application.analytics_jobs,
     )
 
     if args.run_once:

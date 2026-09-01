@@ -27,11 +27,11 @@ class VisionRenderer:
             "helmet": tuple(
                 colors["ppe"]["helmet"]
             ),
-            "safety vest": tuple(
-                colors["ppe"]["safety_vest"]
+            "vest": tuple(
+                colors["ppe"]["vest"]
             ),
-            "safety boots": tuple(
-                colors["ppe"]["safety_boots"]
+            "boots": tuple(
+                colors["ppe"]["boots"]
             ),
         }
 
@@ -394,8 +394,8 @@ class VisionRenderer:
 
         mapping = {
             "helmet": "Helmet",
-            "safety vest": "High Visibility Vest",
-            "safety boots": "Safety Boots",
+            "vest": "High Visibility Vest",
+            "boots": "Safety Boots",
         }
 
         return mapping.get(

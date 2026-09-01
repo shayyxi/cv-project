@@ -18,6 +18,21 @@ class Settings(BaseSettings):
     local_raw_dir: Path = Field(default=BASE_DIR / "data" / "raw")
     local_processed_dir: Path = Field(default=BASE_DIR / "data" / "processed")
     local_failed_dir: Path = Field(default=BASE_DIR / "data" / "failed")
+    local_analytics_dir: Path = Field(default=BASE_DIR / "data" / "analytics")
+
+    smtp_host: str = Field(default="")
+    smtp_port: int = Field(default=587)
+    smtp_user: str = Field(default="")
+    smtp_password: str = Field(default="")
+    smtp_to: str = Field(default="")
+
+    # Daily analytics jobs inside the main loop: report + risk score
+    # + label-queue export run once per day, on the first cycle at or
+    # after report_hour (local time).
+    report_hour: int = Field(default=18)
+    report_days: int = Field(default=7)
+    report_deliver_webhook: bool = Field(default=False)
+    report_deliver_email: bool = Field(default=False)
 
     ftp_poll_interval_seconds: int = Field(default=60)
     processor_sleep_seconds: int = Field(default=5)
