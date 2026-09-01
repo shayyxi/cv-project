@@ -10,6 +10,7 @@ from app.application.analytics_jobs import AnalyticsJobs
 class FakeJobRunRepository:
     def __init__(self) -> None:
         self.last_runs: dict[str, date] = {}
+        self.session = MagicMock()
 
     def get_last_run_date(self, job_name: str) -> date | None:
         return self.last_runs.get(job_name)

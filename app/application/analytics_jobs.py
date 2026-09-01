@@ -75,8 +75,7 @@ class AnalyticsJobs:
 
         return True
 
-    @staticmethod
-    def _run_job(name, job) -> None:
+    def _run_job(self, name, job) -> None:
         try:
             job()
         except Exception:
@@ -84,6 +83,10 @@ class AnalyticsJobs:
                 "Daily analytics job failed: %s",
                 name,
             )
+
+            # Clear any aborted transaction so the failure cannot
+            # poison the shared session for the rest of the loop.
+            self._job_run_repository.session.rollback()
 
     def _report_job(self) -> None:
         report_path = self._report_service.generate_report(

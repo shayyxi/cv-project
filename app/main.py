@@ -21,6 +21,7 @@ def main() -> None:
     runner = ApplicationRunner(
         pipeline=application.pipeline,
         analytics_jobs=application.analytics_jobs,
+        db_session=application.db,
     )
 
     if args.run_once:

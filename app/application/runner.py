@@ -1,6 +1,8 @@
 import logging
 import time
 
+from sqlalchemy.orm import Session
+
 from app.config import settings
 from app.application.analytics_jobs import AnalyticsJobs
 from app.application.pipeline_orchestrator import PipelineOrchestrator
@@ -14,9 +16,11 @@ class ApplicationRunner:
         self,
         pipeline: PipelineOrchestrator,
         analytics_jobs: AnalyticsJobs | None = None,
+        db_session: Session | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._analytics_jobs = analytics_jobs
+        self._db_session = db_session
 
     def run(self) -> None:
         logger.info("Application started.")
@@ -35,8 +39,24 @@ class ApplicationRunner:
                 logger.exception(
                     "Pipeline cycle failed; retrying next interval."
                 )
+                self._rollback()
 
             time.sleep(settings.ftp_poll_interval_seconds)
+
+    def _rollback(self) -> None:
+        """
+        Clear any aborted transaction on the shared session so the
+        next cycle starts clean instead of failing forever with
+        InFailedSqlTransaction.
+        """
+
+        if self._db_session is None:
+            return
+
+        try:
+            self._db_session.rollback()
+        except Exception:
+            logger.exception("Session rollback failed.")
 
     def run_once(self) -> None:
         logger.info("Running single pipeline cycle.")
