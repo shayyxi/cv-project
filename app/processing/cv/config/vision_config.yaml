@@ -6,7 +6,8 @@ models:
 
   person:
     path: "weights/yolov8x.pt"
-    confidence: 0.3
+    confidence: 0.15
+    min_aspect_ratio: 0.8
 
   ppe:
     path: "weights/best.pt"

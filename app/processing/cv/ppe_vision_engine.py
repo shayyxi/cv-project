@@ -84,6 +84,8 @@ class PPEVisionEngine(VisionEngine):
             self._merge_iou,
         )
 
+        persons = self._filter_person_shapes(persons)
+
         detections = []
 
 
@@ -216,6 +218,10 @@ class PPEVisionEngine(VisionEngine):
 
         self._person_confidence = float(
             person.get("confidence", 0.5)
+        )
+
+        self._person_min_aspect = float(
+            person.get("min_aspect_ratio", 0.0)
         )
 
         self._ppe_confidence = float(
@@ -601,6 +607,32 @@ class PPEVisionEngine(VisionEngine):
 
         return detections
 
+
+    def _filter_person_shapes(self, persons):
+        """
+        Drop person boxes that are wider than person-shaped
+        (height / width below min_aspect_ratio). Kills common false
+        positives such as gravel piles and equipment, which the
+        detector reports with high confidence but in boxes no
+        standing or crouching worker produces.
+        """
+
+        if self._person_min_aspect <= 0:
+            return persons
+
+        kept = []
+
+        for bbox, confidence in persons:
+
+            x1, y1, x2, y2 = bbox
+
+            width = max(x2 - x1, 1)
+            height = y2 - y1
+
+            if height / width >= self._person_min_aspect:
+                kept.append((bbox, confidence))
+
+        return kept
 
     def _filter_ppe_to_person(
         self,
