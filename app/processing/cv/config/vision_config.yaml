@@ -6,19 +6,22 @@ models:
 
   person:
     path: "weights/yolov8x.pt"
-    confidence: 0.7
+    confidence: 0.15
+    min_aspect_ratio: 0.8
 
   ppe:
     path: "weights/best.pt"
     confidence: 0.25
+    keep_best_per_class: true
+    min_person_overlap: 0.3
 
 
 classes:
 
   ppe:
     helmet: "helmet"
-    vest: "safety vest"
-    boots: "safety boots"
+    vest: "vest"
+    boots: "boots"
 
 
 sahi:
@@ -47,5 +50,5 @@ colors:
 
   ppe:
     helmet: [0, 255, 0]
-    safety_vest: [0, 165, 255]
-    safety_boots: [255, 0, 255]
+    vest: [0, 165, 255]
+    boots: [255, 0, 255]

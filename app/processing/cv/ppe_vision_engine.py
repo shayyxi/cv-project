@@ -18,6 +18,7 @@ from app.dto import (
 
 )
 from app.processing.cv.vision_engine import VisionEngine
+from app.utils.smart_crop import smart_crop
 
 
 class PPEVisionEngine(VisionEngine):
@@ -83,6 +84,8 @@ class PPEVisionEngine(VisionEngine):
             self._merge_iou,
         )
 
+        persons = self._filter_person_shapes(persons)
+
         detections = []
 
 
@@ -103,6 +106,17 @@ class PPEVisionEngine(VisionEngine):
 
             ppe_detections = self._detect_ppe(crop)
 
+            ppe_detections = self._filter_ppe_to_person(
+                ppe_detections,
+                transform,
+                image.shape,
+                person_bbox,
+            )
+
+            if self._keep_best_per_class:
+                ppe_detections = self._best_per_class(
+                    ppe_detections
+                )
 
             has_helmet = any(
                 d["label"] == self._helmet_class
@@ -206,8 +220,20 @@ class PPEVisionEngine(VisionEngine):
             person.get("confidence", 0.5)
         )
 
+        self._person_min_aspect = float(
+            person.get("min_aspect_ratio", 0.0)
+        )
+
         self._ppe_confidence = float(
             ppe.get("confidence", 0.25)
+        )
+
+        self._keep_best_per_class = bool(
+            ppe.get("keep_best_per_class", True)
+        )
+
+        self._min_person_overlap = float(
+            ppe.get("min_person_overlap", 0.3)
         )
 
         sahi = self._config["sahi"]
@@ -498,117 +524,16 @@ class PPEVisionEngine(VisionEngine):
         y2,
     ):
 
-        image_height, image_width = image.shape[:2]
-
-        bbox_width = x2 - x1
-        bbox_height = y2 - y1
-
-        center_x = (x1 + x2) // 2
-        center_y = (y1 + y2) // 2
-
-        scale = max(
-            bbox_width / self._crop_width,
-            bbox_height / self._crop_height,
+        return smart_crop(
+            image,
+            x1,
+            y1,
+            x2,
+            y2,
+            crop_width=self._crop_width,
+            crop_height=self._crop_height,
+            scale_padding=self._scale_padding,
         )
-
-        scale = max(
-            scale * self._scale_padding,
-            1.2,
-        )
-
-        half_width = int(
-            self._crop_width * scale
-        ) // 2
-
-        half_height = int(
-            self._crop_height * scale
-        ) // 2
-
-        crop_x1 = center_x - half_width
-        crop_y1 = center_y - half_height
-        crop_x2 = center_x + half_width
-        crop_y2 = center_y + half_height
-
-        pad_left = max(
-            0,
-            -crop_x1,
-        )
-
-        pad_top = max(
-            0,
-            -crop_y1,
-        )
-
-        pad_right = max(
-            0,
-            crop_x2 - image_width,
-        )
-
-        pad_bottom = max(
-            0,
-            crop_y2 - image_height,
-        )
-
-        actual_x1 = max(
-            0,
-            crop_x1,
-        )
-
-        actual_y1 = max(
-            0,
-            crop_y1,
-        )
-
-        actual_x2 = min(
-            image_width,
-            crop_x2,
-        )
-
-        actual_y2 = min(
-            image_height,
-            crop_y2,
-        )
-
-        crop = image[
-            actual_y1:actual_y2,
-            actual_x1:actual_x2,
-        ].copy()
-
-        if (
-            pad_left
-            or pad_top
-            or pad_right
-            or pad_bottom
-        ):
-            crop = cv2.copyMakeBorder(
-                crop,
-                pad_top,
-                pad_bottom,
-                pad_left,
-                pad_right,
-                cv2.BORDER_CONSTANT,
-                value=(0, 0, 0),
-            )
-
-        padded_height, padded_width = crop.shape[:2]
-
-        crop = cv2.resize(
-            crop,
-            (
-                self._crop_width,
-                self._crop_height,
-            ),
-            interpolation=cv2.INTER_LANCZOS4,
-        )
-
-        transform = {
-            "origin_x": crop_x1,
-            "origin_y": crop_y1,
-            "scale_x": self._crop_width / padded_width,
-            "scale_y": self._crop_height / padded_height,
-        }
-
-        return crop, transform
 
 
 
@@ -681,6 +606,98 @@ class PPEVisionEngine(VisionEngine):
             )
 
         return detections
+
+
+    def _filter_person_shapes(self, persons):
+        """
+        Drop person boxes that are wider than person-shaped
+        (height / width below min_aspect_ratio). Kills common false
+        positives such as gravel piles and equipment, which the
+        detector reports with high confidence but in boxes no
+        standing or crouching worker produces.
+        """
+
+        if self._person_min_aspect <= 0:
+            return persons
+
+        kept = []
+
+        for bbox, confidence in persons:
+
+            x1, y1, x2, y2 = bbox
+
+            width = max(x2 - x1, 1)
+            height = y2 - y1
+
+            if height / width >= self._person_min_aspect:
+                kept.append((bbox, confidence))
+
+        return kept
+
+    def _filter_ppe_to_person(
+        self,
+        ppe_detections,
+        transform,
+        image_shape,
+        person_bbox,
+    ):
+        """
+        Keep only PPE boxes that lie on this person: at least
+        min_person_overlap of the PPE box area must fall inside the
+        person bbox. Drops a neighbour's gear that is visible in the
+        padded crop, which would otherwise make this person falsely
+        compliant.
+        """
+
+        if self._min_person_overlap <= 0:
+            return ppe_detections
+
+        px1, py1, px2, py2 = person_bbox
+
+        kept = []
+
+        for detection in ppe_detections:
+
+            ox1, oy1, ox2, oy2 = self._crop_bbox_to_original(
+                detection["bbox"],
+                transform,
+                image_shape,
+            )
+
+            area = (ox2 - ox1) * (oy2 - oy1)
+
+            if area <= 0:
+                continue
+
+            overlap_w = min(ox2, px2) - max(ox1, px1)
+            overlap_h = min(oy2, py2) - max(oy1, py1)
+
+            overlap = max(0, overlap_w) * max(0, overlap_h)
+
+            if overlap / area >= self._min_person_overlap:
+                kept.append(detection)
+
+        return kept
+
+    @staticmethod
+    def _best_per_class(ppe_detections):
+        """
+        One detection per PPE class: the highest-confidence box.
+        """
+
+        best = {}
+
+        for detection in ppe_detections:
+
+            current = best.get(detection["label"])
+
+            if (
+                current is None
+                or detection["confidence"] > current["confidence"]
+            ):
+                best[detection["label"]] = detection
+
+        return list(best.values())
 
 
     def _crop_bbox_to_original(

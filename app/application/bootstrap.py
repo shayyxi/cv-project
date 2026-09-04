@@ -1,6 +1,14 @@
 from requests import Session
 
+from app.analytics.analytics_repository import AnalyticsRepository
+from app.analytics.heatmap_service import HeatmapService
+from app.analytics.labeling_service import LabelingService
+from app.analytics.report_service import ReportService
+from app.analytics.risk_service import RiskService
+from app.analytics.scoring_service import ScoringService
+from app.application.analytics_jobs import AnalyticsJobs
 from app.config import settings
+from app.delivery.report_delivery import ReportDeliveryService
 from app.ingestion.http_client import HTTPClient
 from app.ingestion.ingestion_service import IngestionService
 from app.ingestion.panomax_client import PanomaxClient
@@ -8,6 +16,7 @@ from app.storage.database import SessionLocal
 from app.storage.local_storage import LocalStorage
 from app.storage.repositories import DetectionRepository
 from app.storage.repositories.image_job_repository import ImageJobRepository
+from app.storage.repositories.job_run_repository import JobRunRepository
 from app.application.pipeline_orchestrator import (
     PipelineOrchestrator,
 )
@@ -69,7 +78,28 @@ class Application:
             image_cropper=self.image_cropper,
         )
 
+        self.analytics_repository = AnalyticsRepository(self.db)
+
         self.pipeline = PipelineOrchestrator(
             ingestion_service=self.ingestion_service,
             processing_service=self.processing_service,
+            analytics_repository=self.analytics_repository,
+        )
+
+        self.analytics_jobs = AnalyticsJobs(
+            report_service=ReportService(
+                repository=self.analytics_repository,
+                scoring_service=ScoringService(
+                    self.analytics_repository,
+                ),
+            ),
+            risk_service=RiskService(self.analytics_repository),
+            labeling_service=LabelingService(
+                self.analytics_repository,
+            ),
+            delivery_service=ReportDeliveryService(),
+            heatmap_service=HeatmapService(
+                self.analytics_repository,
+            ),
+            job_run_repository=JobRunRepository(self.db),
         )

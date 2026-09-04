@@ -1,0 +1,21 @@
+# Phase 2 analytics configuration.
+
+# Violation weights for safety scoring: a missing helmet hurts the
+# score more than missing boots.
+severity:
+  helmet: 3.0
+  vest: 2.0
+  boots: 1.0
+
+# Defaults for repeated non-compliance flagging.
+repeat_noncompliance:
+  window_days: 7
+  min_violations: 3
+
+# Defaults for trend and heatmap windows (days).
+trends:
+  window_days: 30
+
+heatmap:
+  window_days: 30
+  opacity: 0.5
