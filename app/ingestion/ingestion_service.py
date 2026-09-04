@@ -51,7 +51,7 @@ class IngestionService:
                 # A failed statement leaves the shared session in an
                 # aborted transaction; without this every later query
                 # fails with InFailedSqlTransaction.
-                self._image_job_repository.session.rollback()
+                self._image_job_repository.rollback()
 
         logger.info(
             "Ingestion cycle completed. New=%d Skipped=%d Failed=%d",
