@@ -140,6 +140,9 @@ def cmd_report(args, repository: AnalyticsRepository) -> None:
     service = ReportService(
         repository=repository,
         scoring_service=ScoringService(repository),
+        trends_service=TrendsService(repository),
+        risk_service=RiskService(repository),
+        heatmap_service=HeatmapService(repository),
     )
 
     report_path = service.generate_report(days=args.days)

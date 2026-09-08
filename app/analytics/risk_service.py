@@ -1,5 +1,5 @@
 import logging
-from datetime import date
+from datetime import date, datetime
 
 import joblib
 import numpy as np
@@ -11,6 +11,16 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 FEATURE_NAMES = ["crew", "viol", "rate", "dow", "hour", "rate_7d"]
+
+# Plain-language names for the report.
+FEATURE_LABELS = {
+    "crew": "workers seen",
+    "viol": "violations",
+    "rate": "violations per worker",
+    "dow": "day of week",
+    "hour": "mean capture hour",
+    "rate_7d": "7-day mean violations per worker",
+}
 
 DEFAULT_MEAN_HOUR = 12.0
 
@@ -111,12 +121,7 @@ class RiskService:
         next-day target.
         """
 
-        features = build_daily_features(
-            self._repository.daily_stats(),
-            mean_hours=self._repository.daily_mean_hours(),
-        )
-
-        training = [f for f in features if "next_viol" in f]
+        training = [f for f in self._features() if "next_viol" in f]
 
         if len(training) < min_days:
             logger.info(
@@ -160,42 +165,24 @@ class RiskService:
         no model can be trained yet.
         """
 
-        if self._model_path.exists():
-            model = joblib.load(self._model_path)
-        else:
-            model = self.train(min_days)
+        model = self._load_or_train(min_days)
 
         if model is None:
             return None
 
-        features = build_daily_features(
-            self._repository.daily_stats(),
-            mean_hours=self._repository.daily_mean_hours(),
-        )
+        features = self._features()
 
         if not features:
             return None
 
-        latest = features[-1]
-
-        x = np.array(
-            [[latest[name] for name in FEATURE_NAMES]]
-        )
-
-        predicted = float(model.predict(x)[0])
+        predicted = self._predict(model, features)[-1]
 
         worst_day = max(
             (row["viol"] for row in features),
             default=1,
         )
 
-        risk_score = round(
-            min(
-                100.0,
-                100.0 * predicted / max(float(worst_day), 1.0),
-            ),
-            1,
-        )
+        risk_score = self._risk_score(predicted, worst_day)
 
         logger.info(
             "Predicted violations tomorrow: %.1f -> risk score %s/100",
@@ -207,3 +194,137 @@ class RiskService:
             "predicted_violations": round(predicted, 1),
             "risk_score": risk_score,
         }
+
+    def details(
+        self,
+        min_days: int = 14,
+    ) -> dict:
+        """
+        Everything the compliance report shows about the model:
+        whether it is available, how much history it has, the
+        forecast for tomorrow, the latest day's inputs, the relative
+        feature importances and the in-sample fit over the history
+        (each day's actual violations against what the model
+        predicts from the previous logged day).
+
+        Always returns a dict; "available" is False until enough
+        history exists to train.
+        """
+
+        features = self._features()
+        training = [f for f in features if "next_viol" in f]
+
+        details: dict = {
+            "available": False,
+            "min_days": min_days,
+            "history_days": len(features),
+            "training_days": len(training),
+            "feature_names": list(FEATURE_NAMES),
+            "feature_labels": dict(FEATURE_LABELS),
+            "trained_at": None,
+            "feature_importances": None,
+            "latest": None,
+            "predicted_violations": None,
+            "risk_score": None,
+            "worst_day": None,
+            "backtest": [],
+            "mean_absolute_error": None,
+        }
+
+        model = self._load_or_train(min_days)
+
+        if model is None or not features:
+            return details
+
+        predictions = self._predict(model, features)
+
+        worst = max(features, key=lambda row: row["viol"])
+
+        backtest = [
+            {
+                "day": features[index + 1]["day"],
+                "actual": int(features[index + 1]["viol"]),
+                "predicted": max(predictions[index], 0.0),
+            }
+            for index in range(len(features) - 1)
+        ]
+
+        errors = [
+            abs(entry["predicted"] - entry["actual"]) for entry in backtest
+        ]
+
+        importances = getattr(model, "feature_importances_", None)
+
+        predicted = max(predictions[-1], 0.0)
+
+        details.update(
+            {
+                "available": True,
+                "trained_at": (
+                    datetime.fromtimestamp(self._model_path.stat().st_mtime)
+                    if self._model_path.exists()
+                    else None
+                ),
+                "feature_importances": (
+                    {
+                        name: float(value)
+                        for name, value in zip(FEATURE_NAMES, importances)
+                    }
+                    if importances is not None
+                    else None
+                ),
+                "latest": dict(features[-1]),
+                "predicted_violations": round(predicted, 1),
+                "risk_score": self._risk_score(predicted, worst["viol"]),
+                "worst_day": {
+                    "day": worst["day"],
+                    "violations": int(worst["viol"]),
+                },
+                "backtest": backtest,
+                "mean_absolute_error": (
+                    round(sum(errors) / len(errors), 1) if errors else None
+                ),
+            }
+        )
+
+        return details
+
+    # ==================================================================
+    # Internals
+    # ==================================================================
+
+    def _features(self) -> list[dict]:
+        return build_daily_features(
+            self._repository.daily_stats(),
+            mean_hours=self._repository.daily_mean_hours(),
+        )
+
+    def _load_or_train(
+        self,
+        min_days: int,
+    ) -> GradientBoostingRegressor | None:
+        if self._model_path.exists():
+            return joblib.load(self._model_path)
+
+        return self.train(min_days)
+
+    @staticmethod
+    def _predict(
+        model: GradientBoostingRegressor,
+        features: list[dict],
+    ) -> list[float]:
+        x = np.array(
+            [[row[name] for name in FEATURE_NAMES] for row in features]
+        )
+
+        return [float(value) for value in model.predict(x)]
+
+    @staticmethod
+    def _risk_score(predicted: float, worst_violations: float) -> float:
+        return round(
+            min(
+                100.0,
+                100.0 * predicted / max(float(worst_violations), 1.0),
+            ),
+            1,
+        )
