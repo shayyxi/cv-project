@@ -115,7 +115,7 @@ class ProcessingService:
             # Roll back first: if the failure was a DB error the
             # session is in an aborted transaction and mark_failed's
             # commit would fail too.
-            self._image_job_repository.rollback()
+            self._image_job_repository.session.rollback()
 
             self._image_job_repository.mark_failed(
                 image_job=image_job,
