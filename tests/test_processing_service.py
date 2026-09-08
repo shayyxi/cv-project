@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, create_autospec
+from unittest.mock import create_autospec
 
 from app.dto import (
     BoundingBoxDTO,
@@ -42,9 +42,7 @@ def create_processing_service() -> tuple[
 ]:
     object_storage = create_autospec(ObjectStorage)
     image_job_repository = create_autospec(ImageJobRepository)
-    # session is set in __init__, so autospec does not know it;
-    # the service rolls it back before marking a job failed.
-    image_job_repository.session = MagicMock()
+   
     detection_repository = create_autospec(DetectionRepository)
     image_validator = create_autospec(ImageValidator)
     vision_engine = create_autospec(VisionEngine)
