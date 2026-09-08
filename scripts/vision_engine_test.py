@@ -19,7 +19,7 @@ IMAGE_PATH = Path(
 )
 
 OUTPUT_PATH = Path(
-    "vision_engine_test_result_12875.jpg"
+    "../vision_engine_test_result_12875.jpg"
 )
 
 
