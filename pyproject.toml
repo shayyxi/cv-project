@@ -22,6 +22,7 @@ dependencies = [
     "sahi",
     "PyYAML",
     "reportlab",
+    "matplotlib",
     "scikit-learn",
 ]
 

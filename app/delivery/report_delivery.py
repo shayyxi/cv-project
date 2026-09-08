@@ -32,6 +32,12 @@ class ReportDeliveryService:
         url = url or settings.wordpress_webhook_url
         api_key = api_key or settings.wordpress_api_key
 
+        if not url or not api_key:
+            raise ValueError(
+                "Webhook delivery is not configured; set "
+                "WORDPRESS_WEBHOOK_URL and WORDPRESS_API_KEY in .env"
+            )
+
         report_path = Path(report_path)
 
         with report_path.open("rb") as f:

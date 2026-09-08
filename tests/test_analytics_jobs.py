@@ -2,6 +2,8 @@ from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.application.analytics_jobs import AnalyticsJobs
 
 # settings.report_hour defaults to 18
@@ -104,7 +106,15 @@ def test_heatmap_runs_for_every_camera() -> None:
     )
 
 
-def test_no_delivery_when_disabled() -> None:
+def test_no_delivery_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import settings
+
+    # Pin the toggles so the test does not depend on .env.
+    monkeypatch.setattr(settings, "report_deliver_webhook", False)
+    monkeypatch.setattr(settings, "report_deliver_email", False)
+
     jobs, _ = _jobs()
 
     jobs.run_due(now=datetime(2026, 8, 31, 18, 5))

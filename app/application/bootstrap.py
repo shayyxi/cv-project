@@ -6,6 +6,7 @@ from app.analytics.labeling_service import LabelingService
 from app.analytics.report_service import ReportService
 from app.analytics.risk_service import RiskService
 from app.analytics.scoring_service import ScoringService
+from app.analytics.trends_service import TrendsService
 from app.application.analytics_jobs import AnalyticsJobs
 from app.config import settings
 from app.delivery.report_delivery import ReportDeliveryService
@@ -86,20 +87,26 @@ class Application:
             analytics_repository=self.analytics_repository,
         )
 
+        self.risk_service = RiskService(self.analytics_repository)
+        self.heatmap_service = HeatmapService(self.analytics_repository)
+
         self.analytics_jobs = AnalyticsJobs(
             report_service=ReportService(
                 repository=self.analytics_repository,
                 scoring_service=ScoringService(
                     self.analytics_repository,
                 ),
+                trends_service=TrendsService(
+                    self.analytics_repository,
+                ),
+                risk_service=self.risk_service,
+                heatmap_service=self.heatmap_service,
             ),
-            risk_service=RiskService(self.analytics_repository),
+            risk_service=self.risk_service,
             labeling_service=LabelingService(
                 self.analytics_repository,
             ),
             delivery_service=ReportDeliveryService(),
-            heatmap_service=HeatmapService(
-                self.analytics_repository,
-            ),
+            heatmap_service=self.heatmap_service,
             job_run_repository=JobRunRepository(self.db),
         )

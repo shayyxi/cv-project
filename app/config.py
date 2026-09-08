@@ -37,8 +37,10 @@ class Settings(BaseSettings):
     ftp_poll_interval_seconds: int = Field(default=60)
     processor_sleep_seconds: int = Field(default=5)
 
-    wordpress_webhook_url: str = Field(validation_alias="WORDPRESS_WEBHOOK_URL")
-    wordpress_api_key: str = Field(validation_alias="WORDPRESS_API_KEY")
+    # Optional: only needed when report_deliver_webhook is true or
+    # `scripts.analytics report --webhook` is used.
+    wordpress_webhook_url: str = Field(default="", validation_alias="WORDPRESS_WEBHOOK_URL")
+    wordpress_api_key: str = Field(default="", validation_alias="WORDPRESS_API_KEY")
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

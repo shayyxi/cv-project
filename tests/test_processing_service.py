@@ -42,6 +42,7 @@ def create_processing_service() -> tuple[
 ]:
     object_storage = create_autospec(ObjectStorage)
     image_job_repository = create_autospec(ImageJobRepository)
+   
     detection_repository = create_autospec(DetectionRepository)
     image_validator = create_autospec(ImageValidator)
     vision_engine = create_autospec(VisionEngine)

@@ -111,6 +111,6 @@ class ImageJobRepository:
         self.session.commit()
 
         return count
-
+    
     def rollback(self) -> None:
         self.session.rollback()
