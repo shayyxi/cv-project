@@ -27,254 +27,338 @@ from app.delivery.wordpress_delivery import (
     WordPressDeliveryService,
 )
 
+class TestProcessingService:
+    def setup_method(self) -> None:
+        self.object_storage = create_autospec(ObjectStorage)
+        self.image_job_repository = create_autospec(
+            ImageJobRepository
+        )
+        self.detection_repository = create_autospec(
+            DetectionRepository
+        )
+        self.image_validator = create_autospec(
+            ImageValidator
+        )
+        self.vision_engine = create_autospec(
+            VisionEngine
+        )
+        self.privacy_service = create_autospec(
+            PrivacyService
+        )
+        self.vision_renderer = create_autospec(
+            VisionRenderer
+        )
+        self.image_cropper = create_autospec(
+            ImageCropper
+        )
+        self.delivery_service = create_autospec(
+            WordPressDeliveryService
+        )
 
-def create_image_job() -> ImageJob:
-    return ImageJob(
-        id="job-1",
-        camera_id="6168",
-        remote_url="https://live-image.panomax.com/cams/6168/recent_thumb.jpg",
-        raw_image_path="data/raw/6168/test.jpg",
-        processed_image_path=None,
-        sha256="abc123",
-        status=ImageStatus.DOWNLOADED,
-    )
+        self.service = ProcessingService(
+            object_storage=self.object_storage,
+            image_job_repository=self.image_job_repository,
+            detection_repository=self.detection_repository,
+            image_validator=self.image_validator,
+            vision_engine=self.vision_engine,
+            privacy_service=self.privacy_service,
+            vision_renderer=self.vision_renderer,
+            image_cropper=self.image_cropper,
+            delivery_service=self.delivery_service,
+        )
 
+        self.image_job = self._create_image_job()
 
-def create_processing_service() -> tuple[
-    ProcessingService,
-    ObjectStorage,
-    ImageJobRepository,
-    DetectionRepository,
-    ImageValidator,
-    VisionEngine,
-    PrivacyService,
-    VisionRenderer,
-    ImageCropper,
-    WordPressDeliveryService,
-]:
-    object_storage = create_autospec(ObjectStorage)
-    image_job_repository = create_autospec(ImageJobRepository)
-   
-    detection_repository = create_autospec(DetectionRepository)
-    image_validator = create_autospec(ImageValidator)
-    vision_engine = create_autospec(VisionEngine)
-    privacy_service = create_autospec(PrivacyService)
-    vision_renderer = create_autospec(VisionRenderer)
-    image_cropper = create_autospec(ImageCropper)
-    delivery_service = create_autospec(WordPressDeliveryService)
+        self.raw_bytes = b"raw-image"
+        self.cropped_bytes = b"cropped-image"
+        self.annotated_bytes = b"annotated-image"
+        self.processed_bytes = b"processed-image"
 
-    service = ProcessingService(
-        object_storage=object_storage,
-        image_job_repository=image_job_repository,
-        detection_repository=detection_repository,
-        image_validator=image_validator,
-        vision_engine=vision_engine,
-        privacy_service=privacy_service,
-        vision_renderer=vision_renderer,
-        image_cropper=image_cropper,
-        delivery_service=delivery_service,
-    )
+        self.crop_region = object()
 
-    return (
-        service,
-        object_storage,
-        image_job_repository,
-        detection_repository,
-        image_validator,
-        vision_engine,
-        privacy_service,
-        vision_renderer,
-        image_cropper,
-        delivery_service,
-    )
+        self.vision_result = self._create_vision_result()
 
+        # -----------------------------------------------------
+        # Default successful processing flow
+        # -----------------------------------------------------
 
-def test_process_next_returns_false_when_no_jobs() -> None:
-    (
-        service,
-        _,
-        image_job_repository,
-        _,
-        _,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = create_processing_service()
+        self.object_storage.load_image.return_value = (
+            self.raw_bytes
+        )
 
-    image_job_repository.get_next_downloaded.return_value = None
+        self.image_cropper.crop.return_value = (
+            self.cropped_bytes,
+            self.crop_region,
+        )
 
-    result = service.process_next()
+        self.vision_engine.process_image.return_value = (
+            self.vision_result
+        )
 
-    assert result is False
+        self.image_cropper.translate_result_to_original.return_value = (
+            self.vision_result
+        )
 
-    image_job_repository.mark_processing.assert_not_called()
+        self.vision_renderer.draw_original.return_value = (
+            self.annotated_bytes
+        )
 
+        self.privacy_service.apply_privacy_blur.return_value = (
+            self.processed_bytes
+        )
 
-def test_process_next_processes_image_job() -> None:
-    (
-        service,
-        object_storage,
-        image_job_repository,
-        detection_repository,
-        image_validator,
-        vision_engine,
-        privacy_service,
-        vision_renderer,
-        image_cropper,
-        delivery_service,
-    ) = create_processing_service()
+        self.object_storage.save_processed_image.return_value = (
+            "data/processed/6168/test.jpg"
+        )
 
-    image_job = create_image_job()
+    @staticmethod
+    def _create_image_job() -> ImageJob:
+        return ImageJob(
+            id="job-1",
+            camera_id="6168",
+            remote_url=(
+                "https://live-image.panomax.com/"
+                "cams/6168/recent_thumb.jpg"
+            ),
+            raw_image_path="data/raw/6168/test.jpg",
+            processed_image_path=None,
+            sha256="abc123",
+            status=ImageStatus.DOWNLOADED,
+        )
 
-    image_job_repository.get_next_downloaded.return_value = image_job
+    @staticmethod
+    def _create_vision_result() -> VisionResultDTO:
+        return VisionResultDTO(
+            worker_count=1,
+            detections=[
+                VisionDetectionDTO(
+                    person_id=0,
+                    label="person",
+                    confidence=0.95,
+                    box=BoundingBoxDTO(
+                        x_min=10,
+                        y_min=20,
+                        x_max=100,
+                        y_max=200,
+                    ),
+                    compliance=ComplianceDTO(
+                        helmet=True,
+                        vest=False,
+                        boots=False,
+                        compliant=False,
+                    ),
+                    is_sensitive=False,
+                )
+            ],
+        )
 
-    raw_bytes = b"raw-image"
-    cropped_bytes = b"cropped-image"
-    annotated_bytes = b"annotated-image"
-    processed_bytes = b"processed-image"
+    def test_process_next_returns_false_when_no_jobs(
+        self,
+    ) -> None:
+        self.image_job_repository.get_next_downloaded.return_value = (
+            None
+        )
 
-    crop_region = object()
+        result = self.service.process_next()
 
-    object_storage.load_image.return_value = raw_bytes
+        assert result is False
 
-    image_cropper.crop.return_value = (
-        cropped_bytes,
-        crop_region,
-    )
+        self.image_job_repository.mark_processing.assert_not_called()
+        self.delivery_service.deliver.assert_not_called()
 
-    vision_result = VisionResultDTO(
-        worker_count=1,
-        detections=[
-            VisionDetectionDTO(
-                person_id=0,
-                label="person",
-                confidence=0.95,
-                box=BoundingBoxDTO(
-                    x_min=10,
-                    y_min=20,
-                    x_max=100,
-                    y_max=200,
-                ),
-                compliance=ComplianceDTO(
-                    helmet=True,
-                    vest=False,
-                    boots=False,
-                    compliant=False,
-                ),
-                is_sensitive=False,
-            )
-        ],
-    )
+    def test_process_next_processes_image_job(
+        self,
+    ) -> None:
+        self.image_job_repository.get_next_downloaded.return_value = (
+            self.image_job
+        )
 
-    vision_engine.process_image.return_value = vision_result
+        result = self.service.process_next()
 
-    image_cropper.translate_result_to_original.return_value = (
-        vision_result
-    )
+        assert result is True
 
-    vision_renderer.draw_original.return_value = annotated_bytes
+        self.image_job_repository.mark_processing.assert_called_once_with(
+            self.image_job
+        )
 
-    privacy_service.apply_privacy_blur.return_value = processed_bytes
+        self.object_storage.load_image.assert_called_once_with(
+            self.image_job.raw_image_path
+        )
 
-    object_storage.save_processed_image.return_value = (
-        "data/processed/6168/test.jpg"
-    )
+        self.image_cropper.crop.assert_called_once_with(
+            image_bytes=self.raw_bytes,
+            camera_id=self.image_job.camera_id,
+        )
 
-    result = service.process_next()
+        self.image_validator.validate.assert_called_once_with(
+            self.cropped_bytes
+        )
 
-    assert result is True
+        self.vision_engine.process_image.assert_called_once_with(
+            self.cropped_bytes
+        )
 
+        self.image_cropper.translate_result_to_original.assert_called_once_with(
+            result=self.vision_result,
+            crop_region=self.crop_region,
+        )
 
-    image_job_repository.mark_processing.assert_called_once_with(
-        image_job
-    )
+        self.vision_renderer.draw_original.assert_called_once_with(
+            image_bytes=self.raw_bytes,
+            result=self.vision_result,
+        )
 
+        self.privacy_service.apply_privacy_blur.assert_called_once_with(
+            image_bytes=self.annotated_bytes,
+            vision_result=self.vision_result,
+        )
 
-    object_storage.load_image.assert_called_once_with(
-        image_job.raw_image_path
-    )
+        self.object_storage.save_processed_image.assert_called_once_with(
+            camera_id="6168",
+            image_bytes=self.processed_bytes,
+        )
 
+        self.detection_repository.create_many.assert_called_once_with(
+            image_job_id=self.image_job.id,
+            detections=self.vision_result.detections,
+        )
 
-    image_cropper.crop.assert_called_once_with(
-        image_bytes=raw_bytes,
-        camera_id=image_job.camera_id,
-    )
+        self.image_job_repository.mark_processed.assert_called_once()
 
+        # There is a person detection, therefore WordPress
+        # delivery must be attempted.
+        self.delivery_service.deliver.assert_called_once_with(
+            image_job=self.image_job,
+            vision_result=self.vision_result,
+            processed_image_bytes=self.processed_bytes,
+        )
 
-    image_validator.validate.assert_called_once_with(
-        cropped_bytes
-    )
+        self.image_job_repository.mark_delivered.assert_called_once_with(
+            image_job=self.image_job,
+        )
 
+    def test_process_next_marks_job_failed_on_exception(
+        self,
+    ) -> None:
+        self.image_job_repository.get_next_downloaded.return_value = (
+            self.image_job
+        )
 
+        self.object_storage.load_image.side_effect = RuntimeError(
+            "Storage failure"
+        )
 
-    vision_engine.process_image.assert_called_once_with(
-        cropped_bytes
-    )
+        result = self.service.process_next()
 
+        assert result is True
 
-    image_cropper.translate_result_to_original.assert_called_once_with(
-        result=vision_result,
-        crop_region=crop_region,
-    )
+        self.image_job_repository.rollback.assert_called_once()
 
+        self.image_job_repository.mark_failed.assert_called_once_with(
+            image_job=self.image_job,
+            error_message="Storage failure",
+        )
 
-    vision_renderer.draw_original.assert_called_once_with(
-        image_bytes=raw_bytes,
-        result=vision_result,
-    )
+        self.image_job_repository.mark_processed.assert_not_called()
 
-    privacy_service.apply_privacy_blur.assert_called_once_with(
-        image_bytes=annotated_bytes,
-        vision_result=vision_result,
-    )
+        self.delivery_service.deliver.assert_not_called()
 
+        self.image_job_repository.mark_delivered.assert_not_called()
 
+        self.image_job_repository.mark_delivery_failed.assert_not_called()
 
-    object_storage.save_processed_image.assert_called_once_with(
-        camera_id="6168",
-        image_bytes=processed_bytes,
-    )
+    def test_delivery_failure_does_not_mark_processing_failed(
+        self,
+    ) -> None:
+        self.delivery_service.deliver.side_effect = RuntimeError(
+            "WordPress unavailable"
+        )
 
+        self.service._process_image_job(
+            self.image_job
+        )
 
-    detection_repository.create_many.assert_called_once_with(
-        image_job_id=image_job.id,
-        detections=vision_result.detections,
-    )
+        # CV processing completed successfully.
+        self.image_job_repository.mark_processed.assert_called_once()
 
+        self.delivery_service.deliver.assert_called_once_with(
+            image_job=self.image_job,
+            vision_result=self.vision_result,
+            processed_image_bytes=self.processed_bytes,
+        )
 
-    image_job_repository.mark_processed.assert_called_once()
+        # Delivery has its own failure state.
+        self.image_job_repository.rollback.assert_called_once()
 
-def test_process_next_marks_job_failed_on_exception() -> None:
-    (
-        service,
-        object_storage,
-        image_job_repository,
-        _,
-        _,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = create_processing_service()
+        self.image_job_repository.mark_delivery_failed.assert_called_once_with(
+            image_job=self.image_job,
+            error_message="WordPress unavailable",
+        )
 
-    image_job = create_image_job()
+        # Must NOT convert a WordPress failure into
+        # an image-processing failure.
+        self.image_job_repository.mark_failed.assert_not_called()
 
-    image_job_repository.get_next_downloaded.return_value = image_job
+        self.image_job_repository.mark_delivered.assert_not_called()
 
-    object_storage.load_image.side_effect = RuntimeError(
-        "Storage failure"
-    )
+    def test_no_delivery_when_no_detections(
+        self,
+    ) -> None:
+        self.vision_result.detections = []
+        self.vision_result.worker_count = 0
 
-    result = service.process_next()
+        self.service._process_image_job(
+            self.image_job
+        )
 
-    assert result is True
+        # The image itself should still be processed.
+        self.image_job_repository.mark_processed.assert_called_once()
 
-    image_job_repository.mark_failed.assert_called_once()
+        self.detection_repository.create_many.assert_called_once_with(
+            image_job_id=self.image_job.id,
+            detections=[],
+        )
 
-    image_job_repository.mark_processed.assert_not_called()
+        # No detection means no WordPress API call.
+        self.delivery_service.deliver.assert_not_called()
+
+        self.image_job_repository.mark_delivered.assert_not_called()
+
+        self.image_job_repository.mark_delivery_failed.assert_not_called()
+
+    def test_processed_privacy_image_is_sent_to_wordpress(
+        self,
+    ) -> None:
+        self.service._process_image_job(
+            self.image_job
+        )
+
+        self.delivery_service.deliver.assert_called_once_with(
+            image_job=self.image_job,
+            vision_result=self.vision_result,
+            processed_image_bytes=self.processed_bytes,
+        )
+
+        # This additionally proves that raw/annotated bytes
+        # aren't what gets passed to delivery.
+        call_kwargs = (
+            self.delivery_service.deliver.call_args.kwargs
+        )
+
+        assert (
+            call_kwargs["processed_image_bytes"]
+            == self.processed_bytes
+        )
+
+        assert (
+            call_kwargs["processed_image_bytes"]
+            != self.raw_bytes
+        )
+
+        assert (
+            call_kwargs["processed_image_bytes"]
+            != self.annotated_bytes
+        )
 
 class TestWordPressDeliveryService:
     def setup_method(self) -> None:
