@@ -366,7 +366,6 @@ class _PdfBuilder:
 
         elements += self._header()
         elements += self._kpi_row()
-        elements += self._findings()
         elements += self._trends()
         elements += self._risk()
         elements += self._classes()
@@ -374,7 +373,7 @@ class _PdfBuilder:
         elements += self._weekdays()
         elements += self._heatmap_section()
         elements += self._daily_table()
-        elements += self._method()
+        elements += self._findings()
 
         self._doc.build(
             elements,
@@ -1221,47 +1220,4 @@ class _PdfBuilder:
         # repeating its header row.
         return [
             KeepTogether([self._p("Daily breakdown", "h2"), caption, table]),
-        ]
-
-    def _method(self) -> list:
-        a = self._analysis
-        weight_sum = sum(self._severity.values())
-
-        weights = ", ".join(
-            f"{name} {weight:.0f}" for name, weight in self._severity.items()
-        )
-
-        return [
-            KeepTogether(self._method_items(a, weight_sum, weights)),
-        ]
-
-    def _method_items(self, a: dict, weight_sum: float, weights: str) -> list:
-        return [
-            self._p("Definitions and method", "h2"),
-            self._bullet(
-                "Workers seen counts person detections summed over "
-                "frames. Cameras publish a still every 20 to 60 minutes, "
-                "so a worker who stays in view is counted once per frame; "
-                "treat the figure as sightings, not headcount."
-            ),
-            self._bullet(
-                "A violation is one missing PPE item on one sighting; a "
-                "sighting can carry up to three (helmet, vest, boots)."
-            ),
-            self._bullet(
-                "Safety score = 100 x (1 - weighted violations / (workers "
-                f"x {weight_sum:.0f})) with weights {weights}. 100 means "
-                "no violations; 0 means every sighting missed every item. "
-                "The period score is weighted by workers per camera."
-            ),
-            self._bullet(
-                f"The prior period is the {a['days']} days immediately "
-                "before this report's window; percentage changes compare "
-                "the two."
-            ),
-            self._bullet(
-                "Risk for tomorrow is a gradient-boosted forecast of "
-                "violations from recent history, scaled to 100 at the "
-                "worst day on record."
-            ),
         ]
