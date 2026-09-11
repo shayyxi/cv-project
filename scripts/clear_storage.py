@@ -12,6 +12,7 @@ def main():
     remove(settings.local_raw_dir)
     remove(settings.local_processed_dir)
     remove(settings.local_failed_dir)
+    remove(settings.local_analytics_dir)
 
     print("Storage cleared.")
 

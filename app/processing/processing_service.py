@@ -9,6 +9,7 @@ from app.storage.object_storage import ObjectStorage
 from app.storage.repositories.detection_repository import DetectionRepository
 from app.storage.repositories.image_job_repository import ImageJobRepository
 from app.processing.Image_cropper import ImageCropper
+from app.delivery.wordpress_delivery import WordPressDeliveryService
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class ProcessingService:
         privacy_service: PrivacyService,
         vision_renderer: VisionRenderer,
         image_cropper: ImageCropper,
+        delivery_service: WordPressDeliveryService,
     ) -> None:
         self._object_storage = object_storage
         self._image_job_repository = image_job_repository
@@ -33,6 +35,7 @@ class ProcessingService:
         self._privacy_service = privacy_service
         self._vision_renderer = vision_renderer
         self._image_cropper = image_cropper
+        self._delivery_service = delivery_service
 
     def process_next(self) -> bool:
         image_job = self._image_job_repository.get_next_downloaded()
@@ -59,6 +62,7 @@ class ProcessingService:
             raw_image_bytes = self._object_storage.load_image(
                 image_job.raw_image_path,
             )
+
             cropped_image_bytes, crop_region = self._image_cropper.crop(
                 image_bytes=raw_image_bytes,
                 camera_id=image_job.camera_id,
@@ -95,7 +99,9 @@ class ProcessingService:
                 detections=vision_result.detections,
             )
 
-            duration_ms = int((time.perf_counter() - start_time) * 1000)
+            duration_ms = int(
+                (time.perf_counter() - start_time) * 1000
+            )
 
             self._image_job_repository.mark_processed(
                 image_job=image_job,
@@ -104,7 +110,8 @@ class ProcessingService:
             )
 
             logger.info(
-                "Processed image_job_id=%s camera_id=%s duration_ms=%d detections=%d",
+                "Processed image_job_id=%s camera_id=%s "
+                "duration_ms=%d detections=%d",
                 image_job.id,
                 image_job.camera_id,
                 duration_ms,
@@ -112,9 +119,6 @@ class ProcessingService:
             )
 
         except Exception as exc:
-            # Roll back first: if the failure was a DB error the
-            # session is in an aborted transaction and mark_failed's
-            # commit would fail too.
             self._image_job_repository.rollback()
 
             self._image_job_repository.mark_failed(
@@ -124,6 +128,51 @@ class ProcessingService:
 
             logger.exception(
                 "Processing failed image_job_id=%s camera_id=%s",
+                image_job.id,
+                image_job.camera_id,
+            )
+
+            return
+
+        # ---------------------------------------------------------
+        # WordPress delivery is separate from image processing.
+        # A delivery failure must not mark the image processing
+        # itself as failed.
+        # ---------------------------------------------------------
+
+        try:
+            logger.info(
+                "Delivering image_job_id=%s camera_id=%s to WordPress",
+                image_job.id,
+                image_job.camera_id,
+            )
+
+            self._delivery_service.deliver(
+                image_job=image_job,
+                vision_result=vision_result,
+                processed_image_bytes=processed_image_bytes,
+            )
+
+            self._image_job_repository.mark_delivered(
+                image_job=image_job,
+            )
+
+            logger.info(
+                "Delivered image_job_id=%s camera_id=%s to WordPress",
+                image_job.id,
+                image_job.camera_id,
+            )
+
+        except Exception as exc:
+            self._image_job_repository.rollback()
+
+            self._image_job_repository.mark_delivery_failed(
+                image_job=image_job,
+                error_message=str(exc),
+            )
+
+            logger.exception(
+                "WordPress delivery failed image_job_id=%s camera_id=%s",
                 image_job.id,
                 image_job.camera_id,
             )

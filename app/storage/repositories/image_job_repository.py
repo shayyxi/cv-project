@@ -70,6 +70,20 @@ class ImageJobRepository:
         self.session.refresh(image_job)
         return image_job
 
+    def mark_delivery_failed(
+            self,
+            image_job: ImageJob,
+            error_message: str,
+    ) -> ImageJob:
+        image_job.delivery_status = DeliveryStatus.FAILED
+        image_job.error_message = error_message
+        image_job.retry_count += 1
+
+        self.session.commit()
+        self.session.refresh(image_job)
+
+        return image_job
+
     def mark_failed(self, image_job: ImageJob, error_message: str) -> ImageJob:
         image_job.status = ImageStatus.FAILED
         image_job.error_message = error_message
