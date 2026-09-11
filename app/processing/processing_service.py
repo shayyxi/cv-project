@@ -140,6 +140,15 @@ class ProcessingService:
         # itself as failed.
         # ---------------------------------------------------------
 
+        if not vision_result.detections:
+            logger.info(
+                "Skipping WordPress delivery image_job_id=%s camera_id=%s "
+                "because no detections were found",
+                image_job.id,
+                image_job.camera_id,
+            )
+            return
+
         try:
             logger.info(
                 "Delivering image_job_id=%s camera_id=%s to WordPress",

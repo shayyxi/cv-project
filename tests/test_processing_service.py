@@ -747,3 +747,74 @@ class TestWordPressDeliveryService:
             self.service._rate_limiter.wait.call_count
             == 3
         )
+
+def test_no_delivery_when_no_detections():
+    object_storage = Mock()
+    image_job_repository = Mock()
+    detection_repository = Mock()
+    image_validator = Mock()
+    vision_engine = Mock()
+    privacy_service = Mock()
+    vision_renderer = Mock()
+    image_cropper = Mock()
+    delivery_service = Mock()
+
+    image_job = Mock()
+    image_job.id = "job-123"
+    image_job.camera_id = "12846"
+    image_job.raw_image_path = "/data/raw/test.jpg"
+
+    raw_image_bytes = b"raw-image"
+    cropped_image_bytes = b"cropped-image"
+    annotated_image_bytes = b"annotated-image"
+    processed_image_bytes = b"processed-image"
+
+    crop_region = Mock()
+
+    vision_result = Mock()
+    vision_result.detections = []
+
+    object_storage.load_image.return_value = raw_image_bytes
+
+    image_cropper.crop.return_value = (
+        cropped_image_bytes,
+        crop_region,
+    )
+
+    vision_engine.process_image.return_value = vision_result
+
+    image_cropper.translate_result_to_original.return_value = (
+        vision_result
+    )
+
+    vision_renderer.draw_original.return_value = (
+        annotated_image_bytes
+    )
+
+    privacy_service.apply_privacy_blur.return_value = (
+        processed_image_bytes
+    )
+
+    object_storage.save_processed_image.return_value = (
+        "/data/processed/test.jpg"
+    )
+
+    service = ProcessingService(
+        object_storage=object_storage,
+        image_job_repository=image_job_repository,
+        detection_repository=detection_repository,
+        image_validator=image_validator,
+        vision_engine=vision_engine,
+        privacy_service=privacy_service,
+        vision_renderer=vision_renderer,
+        image_cropper=image_cropper,
+        delivery_service=delivery_service,
+    )
+
+    service._process_image_job(image_job)
+
+    image_job_repository.mark_processed.assert_called_once()
+
+    delivery_service.deliver.assert_not_called()
+    image_job_repository.mark_delivered.assert_not_called()
+    image_job_repository.mark_delivery_failed.assert_not_called()
