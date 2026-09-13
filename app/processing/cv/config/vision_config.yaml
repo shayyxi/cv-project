@@ -28,7 +28,7 @@ sahi:
 
   num_cols: 4
   num_rows: 3
-  target_size: 1000
+  target_size: 640
   overlap_width: 0.20
   overlap_height: 0.20
   overlap: 0.10

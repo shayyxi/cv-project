@@ -6,8 +6,15 @@ import yaml
 
 from app.dto import VisionDetectionDTO
 
+# (x_min, y_min, x_max, y_max) of an area already occupied by a label.
+Rect = tuple[int, int, int, int]
+
 
 class VisionRenderer:
+
+    REGION_COLOR = (255, 0, 0)
+
+    CROP_STATUS_BAR_HEIGHT = 32
 
     def __init__(self):
 
@@ -62,23 +69,51 @@ class VisionRenderer:
 
         annotated = image.copy()
 
-        # Draw detection region first
-        self._draw_processing_region(
+        # Pass 1: every box. Pass 2: every label, so labels sit on top
+        # of all boxes and can be placed without overlapping each other.
+        self._draw_region_polygon(
             annotated,
             result,
         )
 
-        # Then draw people and PPE
         for person in result.detections:
-            self._draw_person(
+            self._draw_box(
                 annotated,
-                person,
+                person.box,
+                self._person_color(person),
+                4,
             )
 
-            self._draw_ppe(
+            for detection in person.ppe:
+                self._draw_box(
+                    annotated,
+                    detection.box,
+                    self._ppe_color(detection),
+                    3,
+                )
+
+        placed: list[Rect] = []
+
+        self._draw_region_label(
+            annotated,
+            result,
+            placed,
+        )
+
+        for person in result.detections:
+            self._draw_person_label(
                 annotated,
                 person,
+                placed,
             )
+
+            for detection in person.ppe:
+                self._draw_ppe_label(
+                    annotated,
+                    detection,
+                    detection.box,
+                    placed,
+                )
 
         success, encoded = cv2.imencode(
             ".jpg",
@@ -105,33 +140,24 @@ class VisionRenderer:
         annotated = crop.copy()
 
         for detection in person.ppe:
-
-            bbox = detection.crop_box
-
-            color = self._ppe_colors.get(
-                detection.label.lower(),
-                (200, 200, 200),
-            )
-
             self._draw_box(
                 annotated,
-                bbox,
-                color,
+                detection.crop_box,
+                self._ppe_color(detection),
                 3,
             )
 
-            self._draw_label(
+        # Reserve the status bar so no label ends up hidden under it.
+        placed: list[Rect] = [
+            (0, 0, annotated.shape[1], self.CROP_STATUS_BAR_HEIGHT),
+        ]
+
+        for detection in person.ppe:
+            self._draw_ppe_label(
                 annotated,
-                (
-                    f"{self._display_label(detection.label)} "
-                    f"{detection.confidence:.2f}"
-                ),
-                bbox.x_min,
-                max(
-                    bbox.y_min - 5,
-                    20,
-                ),
-                color,
+                detection,
+                detection.crop_box,
+                placed,
             )
 
         self._draw_crop_status(
@@ -141,20 +167,19 @@ class VisionRenderer:
 
         return annotated
 
-    def _draw_processing_region(
-            self,
-            image,
-            result,
-    ):
+    # ==================================================================
+    # Region
+    # ==================================================================
+
+    @staticmethod
+    def _region_polygon(result):
+
         region = result.processing_region
 
-        if region is None:
-            return
+        if region is None or not region.polygon:
+            return None
 
-        if not region.polygon:
-            return
-
-        polygon = np.array(
+        return np.array(
             [
                 [point.x, point.y]
                 for point in region.polygon
@@ -162,16 +187,34 @@ class VisionRenderer:
             dtype=np.int32,
         )
 
-        region_color = (255, 0, 0)
+    def _draw_region_polygon(
+            self,
+            image,
+            result,
+    ):
+        polygon = self._region_polygon(result)
 
-        # Draw the actual polygon boundary
+        if polygon is None:
+            return
+
         cv2.polylines(
             image,
             [polygon],
             isClosed=True,
-            color=region_color,
+            color=self.REGION_COLOR,
             thickness=5,
         )
+
+    def _draw_region_label(
+            self,
+            image,
+            result,
+            placed: list[Rect],
+    ):
+        polygon = self._region_polygon(result)
+
+        if polygon is None:
+            return
 
         # Label near the first polygon point
         x = int(polygon[0][0])
@@ -181,30 +224,42 @@ class VisionRenderer:
             image,
             "DETECTION REGION",
             x,
-            max(y - 10, 25),
-            region_color,
-            scale=0.8,
-            thickness=2,
+            y - 10,
+            self.REGION_COLOR,
+            scale=0.55,
+            thickness=1,
+            placed=placed,
         )
 
-    def _draw_person(
+    # ==================================================================
+    # People and PPE
+    # ==================================================================
+
+    def _person_color(
         self,
-        image,
         person,
     ):
-
-        color = (
+        return (
             self._compliant_color
             if person.compliance.compliant
             else self._non_compliant_color
         )
 
-        self._draw_box(
-            image,
-            person.box,
-            color,
-            4,
+    def _ppe_color(
+        self,
+        detection,
+    ):
+        return self._ppe_colors.get(
+            detection.label.lower(),
+            (200, 200, 200),
         )
+
+    def _draw_person_label(
+        self,
+        image,
+        person,
+        placed: list[Rect],
+    ):
 
         status = (
             "COMPLIANT"
@@ -213,7 +268,7 @@ class VisionRenderer:
         )
 
         text = (
-            f"P{person.person_id} | {status} | "
+            f"P{person.person_id} {person.confidence:.2f} | {status} | "
             f"H:{'Y' if person.compliance.helmet else 'N'} "
             f"V:{'Y' if person.compliance.vest else 'N'} "
             f"B:{'Y' if person.compliance.boots else 'N'}"
@@ -223,53 +278,32 @@ class VisionRenderer:
             image,
             text,
             person.box.x_min,
-            max(
-                person.box.y_min - 10,
-                25,
-            ),
-            color,
-            scale=0.8,
-            thickness=2,
+            person.box.y_min - 10,
+            self._person_color(person),
+            scale=0.55,
+            thickness=1,
+            placed=placed,
         )
 
-
-    def _draw_ppe(
+    def _draw_ppe_label(
         self,
         image,
-        person,
+        detection,
+        bbox,
+        placed: list[Rect],
     ):
 
-        for detection in person.ppe:
-
-            bbox = detection.box
-
-            color = self._ppe_colors.get(
-                detection.label.lower(),
-                (200, 200, 200),
-            )
-
-            self._draw_box(
-                image,
-                bbox,
-                color,
-                3,
-            )
-
-            self._draw_label(
-                image,
-                (
-                    f"{self._display_label(detection.label)} "
-                    f"{detection.confidence:.2f}"
-                ),
-                bbox.x_min,
-                max(
-                    bbox.y_min - 5,
-                    20,
-                ),
-                color,
-            )
-
-
+        self._draw_label(
+            image,
+            (
+                f"{self._display_label(detection.label)} "
+                f"{detection.confidence:.2f}"
+            ),
+            bbox.x_min,
+            bbox.y_min - 5,
+            self._ppe_color(detection),
+            placed=placed,
+        )
 
     def _draw_crop_status(
         self,
@@ -277,11 +311,7 @@ class VisionRenderer:
         person,
     ):
 
-        color = (
-            self._compliant_color
-            if person.compliance.compliant
-            else self._non_compliant_color
-        )
+        color = self._person_color(person)
 
         status = (
             "COMPLIANT"
@@ -290,7 +320,7 @@ class VisionRenderer:
         )
 
         text = (
-            f"P{person.person_id} | {status} | "
+            f"P{person.person_id} {person.confidence:.2f} | {status} | "
             f"Hat:{'YES' if person.compliance.helmet else 'NO'} "
             f"Vest:{'YES' if person.compliance.vest else 'NO'} "
             f"Boots:{'YES' if person.compliance.boots else 'NO'}"
@@ -299,7 +329,7 @@ class VisionRenderer:
         cv2.rectangle(
             image,
             (0, 0),
-            (image.shape[1], 45),
+            (image.shape[1], self.CROP_STATUS_BAR_HEIGHT),
             color,
             -1,
         )
@@ -307,15 +337,17 @@ class VisionRenderer:
         cv2.putText(
             image,
             text,
-            (8, 30),
+            (8, 22),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
+            0.5,
             (255, 255, 255),
-            2,
+            1,
             cv2.LINE_AA,
         )
 
-
+    # ==================================================================
+    # Primitives
+    # ==================================================================
 
     @staticmethod
     def _draw_box(
@@ -346,9 +378,17 @@ class VisionRenderer:
         x,
         y,
         color,
-        scale=0.6,
-        thickness=2,
-    ):
+        scale=0.45,
+        thickness=1,
+        placed: list[Rect] | None = None,
+    ) -> Rect:
+        """
+        Draw `text` in a filled box whose baseline is near (x, y).
+
+        The box is kept inside the image. When `placed` is given, the
+        box is moved down past any rectangle already in it so labels
+        never overlap each other, and the final rectangle is appended.
+        """
 
         (tw, th), base = cv2.getTextSize(
             text,
@@ -357,15 +397,43 @@ class VisionRenderer:
             thickness,
         )
 
-        y = max(
-            y,
-            th + 4,
-        )
+        box_w = tw + 4
+        box_h = th + base + 4
+
+        image_h, image_w = image.shape[:2]
+
+        x = max(0, min(int(x), image_w - box_w))
+        top = max(0, int(y) - th - base - 2)
+
+        if placed:
+            # Each pass moves the box below one rectangle it overlaps.
+            # A box never re-hits a rectangle it was moved below, so
+            # len(placed) passes are enough to clear all of them.
+            for _ in range(len(placed)):
+                rect = (x, top, x + box_w, top + box_h)
+
+                hit = next(
+                    (
+                        other
+                        for other in placed
+                        if VisionRenderer._overlaps(rect, other)
+                    ),
+                    None,
+                )
+
+                if hit is None:
+                    break
+
+                top = hit[3] + 1
+
+        top = max(0, min(top, image_h - box_h))
+
+        rect = (x, top, x + box_w, top + box_h)
 
         cv2.rectangle(
             image,
-            (x, y - th - base - 2),
-            (x + tw + 4, y + 2),
+            (rect[0], rect[1]),
+            (rect[2], rect[3]),
             color,
             -1,
         )
@@ -379,12 +447,29 @@ class VisionRenderer:
         cv2.putText(
             image,
             text,
-            (x + 2, y - 2),
+            (x + 2, top + th + 2),
             cv2.FONT_HERSHEY_SIMPLEX,
             scale,
             text_color,
             thickness,
             cv2.LINE_AA,
+        )
+
+        if placed is not None:
+            placed.append(rect)
+
+        return rect
+
+    @staticmethod
+    def _overlaps(
+        a: Rect,
+        b: Rect,
+    ) -> bool:
+        return (
+            a[0] < b[2]
+            and b[0] < a[2]
+            and a[1] < b[3]
+            and b[1] < a[3]
         )
 
     @staticmethod
