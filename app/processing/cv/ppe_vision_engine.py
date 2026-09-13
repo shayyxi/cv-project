@@ -392,7 +392,7 @@ class PPEVisionEngine(VisionEngine):
             slice_width=slice_width,
             overlap_height_ratio=self._overlap,
             overlap_width_ratio=self._overlap,
-            perform_standard_pred=False,
+            perform_standard_pred=True,
         )
 
         return [
