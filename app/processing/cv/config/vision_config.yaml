@@ -5,8 +5,8 @@ device:
 models:
 
   person:
-    path: "weights/yolov8x.pt"
-    confidence: 0.15
+    path: "weights/yolo11x-seg.pt"
+    confidence: 0.30
     min_aspect_ratio: 0.8
 
   ppe:
@@ -32,7 +32,10 @@ sahi:
   overlap_width: 0.20
   overlap_height: 0.20
   overlap: 0.10
-  merge_iou: 0.45
+  # Two person detections merge when the overlap of their silhouettes
+  # (boxes if no silhouette) covers this fraction of the smaller one.
+  # Catches torso/legs fragments left over from slicing.
+  merge_overlap: 0.70
 
 
 crop:

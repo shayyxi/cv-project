@@ -353,7 +353,8 @@ class ImageCropper:
         Translate detection coordinates from crop coordinates into
         original-image coordinates.
 
-        Person and PPE boxes are translated.
+        Person boxes, person silhouette masks and PPE boxes are
+        translated.
 
         crop_box remains in crop coordinates.
 
@@ -375,6 +376,11 @@ class ImageCropper:
             person.box.x_max += x_offset
             person.box.y_min += y_offset
             person.box.y_max += y_offset
+
+            for polygon in person.mask or []:
+                for point in polygon:
+                    point.x += x_offset
+                    point.y += y_offset
 
             for ppe in person.ppe:
                 ppe.box.x_min += x_offset

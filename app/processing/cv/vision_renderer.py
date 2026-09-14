@@ -16,6 +16,11 @@ class VisionRenderer:
 
     CROP_STATUS_BAR_HEIGHT = 32
 
+    # Opacity of the tint inside a person silhouette (0 = none, 1 = solid).
+    MASK_FILL_ALPHA = 0.25
+
+    MASK_OUTLINE_THICKNESS = 4
+
     def __init__(self):
 
         self._config = self._load_config()
@@ -69,21 +74,20 @@ class VisionRenderer:
 
         annotated = image.copy()
 
-        # Pass 1: every box. Pass 2: every label, so labels sit on top
-        # of all boxes and can be placed without overlapping each other.
+        # Pass 1: every silhouette/box. Pass 2: every label, so labels
+        # sit on top of all shapes and can be placed without overlapping
+        # each other.
         self._draw_region_polygon(
             annotated,
             result,
         )
 
-        for person in result.detections:
-            self._draw_box(
-                annotated,
-                person.box,
-                self._person_color(person),
-                4,
-            )
+        self._draw_persons(
+            annotated,
+            result.detections,
+        )
 
+        for person in result.detections:
             for detection in person.ppe:
                 self._draw_box(
                     annotated,
@@ -234,6 +238,93 @@ class VisionRenderer:
     # ==================================================================
     # People and PPE
     # ==================================================================
+
+    def _draw_persons(
+        self,
+        image,
+        persons,
+    ):
+        """
+        Segmented persons get a translucent fill plus an outline in the
+        compliance color. Persons without a mask (detect-only weights)
+        keep the rectangle. All fills are blended in a single pass so
+        overlapping workers do not stack tints.
+        """
+
+        overlay = None
+
+        for person in persons:
+
+            polygons = self._mask_polygons(person.mask)
+
+            if polygons is None:
+                self._draw_box(
+                    image,
+                    person.box,
+                    self._person_color(person),
+                    4,
+                )
+                continue
+
+            if overlay is None:
+                overlay = image.copy()
+
+            cv2.fillPoly(
+                overlay,
+                polygons,
+                self._person_color(person),
+            )
+
+        if overlay is None:
+            return
+
+        cv2.addWeighted(
+            overlay,
+            self.MASK_FILL_ALPHA,
+            image,
+            1 - self.MASK_FILL_ALPHA,
+            0,
+            dst=image,
+        )
+
+        for person in persons:
+
+            polygons = self._mask_polygons(person.mask)
+
+            if polygons is None:
+                continue
+
+            cv2.polylines(
+                image,
+                polygons,
+                isClosed=True,
+                color=self._person_color(person),
+                thickness=self.MASK_OUTLINE_THICKNESS,
+            )
+
+    @staticmethod
+    def _mask_polygons(mask):
+        """
+        DTO mask (list of PointDTO polygons) -> list of int32 Nx2 arrays
+        for cv2. None when there is nothing drawable.
+        """
+
+        if not mask:
+            return None
+
+        polygons = [
+            np.array(
+                [
+                    [point.x, point.y]
+                    for point in polygon
+                ],
+                dtype=np.int32,
+            )
+            for polygon in mask
+            if len(polygon) >= 3
+        ]
+
+        return polygons or None
 
     def _person_color(
         self,

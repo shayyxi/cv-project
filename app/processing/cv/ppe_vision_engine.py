@@ -7,10 +7,13 @@ import yaml
 import math
 from sahi import AutoDetectionModel
 from sahi.predict import get_sliced_prediction
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
 from ultralytics import YOLO
 
 from app.dto import (
     BoundingBoxDTO,
+    PointDTO,
     VisionDetectionDTO,
     VisionResultDTO,
     ComplianceDTO,
@@ -81,7 +84,7 @@ class PPEVisionEngine(VisionEngine):
 
         persons = self._merge_persons(
             raw_persons,
-            self._merge_iou,
+            self._merge_overlap,
         )
 
         persons = self._filter_person_shapes(persons)
@@ -90,9 +93,11 @@ class PPEVisionEngine(VisionEngine):
 
 
 
-        for person_id, (person_bbox, person_confidence) in enumerate(
-            persons
-        ):
+        for person_id, (
+            person_bbox,
+            person_confidence,
+            person_polygons,
+        ) in enumerate(persons):
 
             x1, y1, x2, y2 = person_bbox
 
@@ -153,6 +158,10 @@ class PPEVisionEngine(VisionEngine):
                         y_min=y1,
                         x_max=x2,
                         y_max=y2,
+                    ),
+                    mask=self._build_mask(
+                        person_polygons,
+                        image.shape,
                     ),
                     is_sensitive=False,
 
@@ -255,8 +264,8 @@ class PPEVisionEngine(VisionEngine):
             sahi.get("overlap_height")
         )
 
-        self._merge_iou = float(
-            sahi.get("merge_iou")
+        self._merge_overlap = float(
+            sahi.get("merge_overlap")
         )
 
         self._target_size = int(
@@ -401,118 +410,280 @@ class PPEVisionEngine(VisionEngine):
             if obj.category.id == 0
         ]
 
+    @classmethod
     def _merge_persons(
-        self,
+        cls,
         persons,
-        iou_thresh: float,
+        overlap_thresh: float,
     ):
+        """
+        Collapse fragments of the same worker into one detection.
 
-        boxes = []
+        SAHI's own merge is greedy and box-based: a slice fragment that
+        does not directly overlap the highest-scoring fragment survives
+        as its own "person" (legs-only, torso-only). Here every pair is
+        compared with intersection-over-smaller on the silhouettes
+        (boxes when no silhouette exists) and merging repeats until
+        nothing overlaps above overlap_thresh.
 
-        for obj in persons:
+        Overlap-over-smaller catches a torso or legs fragment sitting
+        inside a full-body detection, which IoU never does. Comparing
+        silhouettes instead of boxes keeps two neighbouring workers
+        apart even when their boxes overlap heavily.
 
-            x1, y1, x2, y2 = map(
-                int,
-                obj.bbox.to_xyxy(),
-            )
+        Returns [(bbox, score, polygons)] sorted by score, polygons in
+        COCO flat format ([x1, y1, x2, y2, ...] per polygon).
+        """
 
-            boxes.append(
-                [
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                    float(obj.score.value),
-                ]
-            )
+        entries = [cls._merge_entry(obj) for obj in persons]
 
-        boxes.sort(
-            key=lambda box: box[4],
+        entries.sort(
+            key=lambda entry: entry["score"],
             reverse=True,
         )
 
-        merged = []
-        used = [False] * len(boxes)
+        changed = True
 
-        for i in range(len(boxes)):
+        while changed:
 
-            if used[i]:
-                continue
+            changed = False
+            merged = []
+            used = [False] * len(entries)
 
-            bbox = boxes[i][:4]
-            best_score = boxes[i][4]
+            for i, current in enumerate(entries):
 
-            used[i] = True
-
-            for j in range(i + 1, len(boxes)):
-
-                if used[j]:
+                if used[i]:
                     continue
 
-                if self._iou(
-                    bbox,
-                    boxes[j][:4],
-                ) > iou_thresh:
+                used[i] = True
 
-                    other = boxes[j][:4]
+                for j in range(i + 1, len(entries)):
 
-                    bbox = [
-                        min(bbox[0], other[0]),
-                        min(bbox[1], other[1]),
-                        max(bbox[2], other[2]),
-                        max(bbox[3], other[3]),
-                    ]
+                    if used[j]:
+                        continue
 
-                    best_score = max(
-                        best_score,
-                        boxes[j][4],
+                    overlap = cls._overlap_over_smaller(
+                        current,
+                        entries[j],
                     )
 
-                    used[j] = True
+                    if overlap >= overlap_thresh:
+                        current = cls._merge_pair(
+                            current,
+                            entries[j],
+                        )
+                        used[j] = True
+                        changed = True
 
-            merged.append(
+                merged.append(current)
+
+            entries = merged
+
+        return [
+            (
+                entry["bbox"],
+                entry["score"],
                 (
-                    bbox,
-                    best_score,
-                )
+                    cls._shape_to_polygons(entry["shape"])
+                    if entry["shape"] is not None
+                    else entry["polygons"]
+                ),
             )
+            for entry in entries
+        ]
 
-        return merged
+    @classmethod
+    def _merge_entry(cls, obj) -> dict:
+
+        x1, y1, x2, y2 = map(
+            int,
+            obj.bbox.to_xyxy(),
+        )
+
+        # SAHI attaches a Mask (COCO polygons, full-image coords)
+        # only when the person weight is a segmentation model.
+        mask = getattr(obj, "mask", None)
+
+        polygons = (
+            list(mask.segmentation)
+            if mask is not None
+            else []
+        )
+
+        return {
+            "bbox": [x1, y1, x2, y2],
+            "score": float(obj.score.value),
+            "polygons": polygons,
+            "shape": cls._polygons_to_shape(polygons),
+        }
 
     @staticmethod
-    def _iou(a, b) -> float:
+    def _polygons_to_shape(polygons):
+        """
+        COCO flat polygons -> one shapely geometry (or None when there
+        is no valid polygon). buffer(0) repairs self-intersections that
+        contour tracing produces.
+        """
+
+        shapes = []
+
+        for polygon in polygons:
+
+            coords = list(polygon)
+
+            if len(coords) < 6:
+                continue
+
+            shape = Polygon(
+                list(zip(coords[0::2], coords[1::2]))
+            ).buffer(0)
+
+            if not shape.is_empty:
+                shapes.append(shape)
+
+        if not shapes:
+            return None
+
+        return unary_union(shapes)
+
+    @staticmethod
+    def _shape_to_polygons(shape):
+        """
+        Shapely geometry -> COCO flat polygons (exterior rings only).
+        """
+
+        geoms = (
+            shape.geoms
+            if hasattr(shape, "geoms")
+            else [shape]
+        )
+
+        polygons = []
+
+        for geom in geoms:
+
+            if geom.is_empty or geom.geom_type != "Polygon":
+                continue
+
+            # Drop the closing point shapely repeats.
+            coords = list(geom.exterior.coords)[:-1]
+
+            if len(coords) < 3:
+                continue
+
+            polygons.append(
+                [
+                    value
+                    for point in coords
+                    for value in point
+                ]
+            )
+
+        return polygons
+
+    @classmethod
+    def _overlap_over_smaller(cls, a: dict, b: dict) -> float:
+
+        if a["shape"] is not None and b["shape"] is not None:
+
+            smaller = min(a["shape"].area, b["shape"].area)
+
+            if smaller > 0:
+                return (
+                    a["shape"].intersection(b["shape"]).area
+                    / smaller
+                )
+
+        return cls._box_overlap_over_smaller(
+            a["bbox"],
+            b["bbox"],
+        )
+
+    @staticmethod
+    def _merge_pair(a: dict, b: dict) -> dict:
+
+        if a["shape"] is not None and b["shape"] is not None:
+            shape = a["shape"].union(b["shape"])
+        else:
+            shape = a["shape"] if a["shape"] is not None else b["shape"]
+
+        return {
+            "bbox": [
+                min(a["bbox"][0], b["bbox"][0]),
+                min(a["bbox"][1], b["bbox"][1]),
+                max(a["bbox"][2], b["bbox"][2]),
+                max(a["bbox"][3], b["bbox"][3]),
+            ],
+            "score": max(a["score"], b["score"]),
+            "polygons": a["polygons"] + b["polygons"],
+            "shape": shape,
+        }
+
+    @staticmethod
+    def _build_mask(
+        polygons,
+        image_shape,
+    ):
+        """
+        Convert SAHI COCO polygons ([x1, y1, x2, y2, ...] per polygon)
+        into PointDTO lists clamped to the image. Returns None when the
+        detector produced no usable silhouette (detect-only weights, or
+        masks with fewer than three vertices), so the renderer falls
+        back to the bounding box.
+        """
+
+        height, width = image_shape[:2]
+
+        result = []
+
+        for polygon in polygons:
+
+            coords = list(polygon)
+
+            if len(coords) < 6:
+                continue
+
+            points = [
+                PointDTO(
+                    x=max(
+                        0,
+                        min(width - 1, int(round(coords[i]))),
+                    ),
+                    y=max(
+                        0,
+                        min(height - 1, int(round(coords[i + 1]))),
+                    ),
+                )
+                for i in range(0, len(coords) - 1, 2)
+            ]
+
+            result.append(points)
+
+        return result or None
+
+    @staticmethod
+    def _box_overlap_over_smaller(a, b) -> float:
 
         ax1, ay1, ax2, ay2 = a
         bx1, by1, bx2, by2 = b
 
-        ix1 = max(ax1, bx1)
-        iy1 = max(ay1, by1)
-        ix2 = min(ax2, bx2)
-        iy2 = min(ay2, by2)
-
-        iw = max(0, ix2 - ix1)
-        ih = max(0, iy2 - iy1)
+        iw = max(0, min(ax2, bx2) - max(ax1, bx1))
+        ih = max(0, min(ay2, by2) - max(ay1, by1))
 
         intersection = iw * ih
 
         if intersection <= 0:
             return 0.0
 
-        area_a = (
-            ax2 - ax1
-        ) * (
-            ay2 - ay1
+        smaller = min(
+            (ax2 - ax1) * (ay2 - ay1),
+            (bx2 - bx1) * (by2 - by1),
         )
 
-        area_b = (
-            bx2 - bx1
-        ) * (
-            by2 - by1
-        )
+        if smaller <= 0:
+            return 0.0
 
-        return intersection / (
-            area_a + area_b - intersection
-        )
+        return intersection / smaller
 
 
     def _smart_crop(
@@ -622,7 +793,7 @@ class PPEVisionEngine(VisionEngine):
 
         kept = []
 
-        for bbox, confidence in persons:
+        for bbox, confidence, polygons in persons:
 
             x1, y1, x2, y2 = bbox
 
@@ -630,7 +801,7 @@ class PPEVisionEngine(VisionEngine):
             height = y2 - y1
 
             if height / width >= self._person_min_aspect:
-                kept.append((bbox, confidence))
+                kept.append((bbox, confidence, polygons))
 
         return kept
 

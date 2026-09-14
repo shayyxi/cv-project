@@ -49,6 +49,11 @@ class VisionDetectionDTO(BaseModel):
     label: str
     confidence: float
     box: BoundingBoxDTO
+
+    # Silhouette polygons in the same coordinate frame as `box`.
+    # None when the person model is detect-only (no segmentation head).
+    mask: List[List[PointDTO]] | None = None
+
     is_sensitive: bool
 
     person_id: int
