@@ -125,31 +125,84 @@ class TestWordPressDeliveryService:
             processed_image_bytes=self.processed_image_bytes,
         )
 
+        self.session.post.assert_called_once()
+
         _, kwargs = self.session.post.call_args
 
+        # Multipart text fields
+        assert "data" in kwargs
+        data = kwargs["data"]
+
+        assert data["metadata[event_id]"] == "job-123"
+        assert data["metadata[camera_id]"] == "12846"
+
+        assert (
+                data["metadata[summary][worker_count]"]
+                == "2"
+        )
+        assert (
+                data["metadata[summary][compliant_count]"]
+                == "1"
+        )
+        assert (
+                data["metadata[summary][non_compliant_count]"]
+                == "1"
+        )
+
+        # Worker 0 - compliant
+        assert (
+                data["metadata[workers][0][person_id]"]
+                == "0"
+        )
+        assert (
+                data["metadata[workers][0][helmet]"]
+                == "1"
+        )
+        assert (
+                data["metadata[workers][0][vest]"]
+                == "1"
+        )
+        assert (
+                data["metadata[workers][0][boots]"]
+                == "1"
+        )
+        assert (
+                data["metadata[workers][0][compliant]"]
+                == "1"
+        )
+
+        # Worker 1 - non-compliant
+        assert (
+                data["metadata[workers][1][person_id]"]
+                == "1"
+        )
+        assert (
+                data["metadata[workers][1][helmet]"]
+                == "1"
+        )
+        assert (
+                data["metadata[workers][1][vest]"]
+                == "0"
+        )
+        assert (
+                data["metadata[workers][1][boots]"]
+                == "1"
+        )
+        assert (
+                data["metadata[workers][1][compliant]"]
+                == "0"
+        )
+
+        # Multipart file
         assert "files" in kwargs
 
         files = kwargs["files"]
 
-        assert "metadata" in files
         assert "image" in files
+        assert "metadata" not in files
 
-        metadata_part = files["metadata"]
         image_part = files["image"]
 
-        # metadata = (
-        #     None,
-        #     json_string,
-        #     "application/json",
-        # )
-        assert metadata_part[0] is None
-        assert metadata_part[2] == "application/json"
-
-        # image = (
-        #     filename,
-        #     image_bytes,
-        #     "image/jpeg",
-        # )
         assert image_part[0] == "job-123.jpg"
         assert image_part[1] == self.processed_image_bytes
         assert image_part[2] == "image/jpeg"
