@@ -97,7 +97,6 @@ class WordPressDeliveryService:
     ) -> None:
         headers = {
             settings.wordpress_api_key_header: (
-                f"{settings.wordpress_api_key_prefix}"
                 f"{self._api_key}"
             )
         }

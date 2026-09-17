@@ -44,7 +44,6 @@ class Settings(BaseSettings):
     wordpress_timeout_seconds: int = 30
 
     wordpress_api_key_header: str = "X-API-Key"
-    wordpress_api_key_prefix: str = ""
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
