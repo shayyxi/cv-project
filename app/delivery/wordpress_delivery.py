@@ -89,13 +89,12 @@ class WordPressDeliveryService:
         )
 
     def _send(
-        self,
-        *,
-        metadata: dict,
-        image_bytes: bytes,
-        filename: str,
+            self,
+            *,
+            metadata: dict,
+            image_bytes: bytes,
+            filename: str,
     ) -> None:
-
         headers = {
             settings.wordpress_api_key_header: (
                 f"{settings.wordpress_api_key_prefix}"
@@ -103,23 +102,55 @@ class WordPressDeliveryService:
             )
         }
 
+        form_data = {
+            "metadata[event_id]": metadata["event_id"],
+            "metadata[camera_id]": metadata["camera_id"],
+            "metadata[captured_at]": metadata["captured_at"],
+            "metadata[summary][worker_count]": str(
+                metadata["summary"]["worker_count"]
+            ),
+            "metadata[summary][compliant_count]": str(
+                metadata["summary"]["compliant_count"]
+            ),
+            "metadata[summary][non_compliant_count]": str(
+                metadata["summary"]["non_compliant_count"]
+            ),
+        }
+
+        for index, worker in enumerate(metadata["workers"]):
+            prefix = f"metadata[workers][{index}]"
+
+            form_data[f"{prefix}[person_id]"] = str(
+                worker["person_id"]
+            )
+
+            form_data[f"{prefix}[helmet]"] = (
+                "1" if worker["helmet"] else "0"
+            )
+
+            form_data[f"{prefix}[vest]"] = (
+                "1" if worker["vest"] else "0"
+            )
+
+            form_data[f"{prefix}[boots]"] = (
+                "1" if worker["boots"] else "0"
+            )
+
+            form_data[f"{prefix}[compliant]"] = (
+                "1" if worker["compliant"] else "0"
+            )
+
         max_attempts = 4
 
         for attempt in range(1, max_attempts + 1):
-
-            # Applies to initial calls AND retries.
             self._rate_limiter.wait()
 
             try:
                 response = self._session.post(
                     self._endpoint,
                     headers=headers,
+                    data=form_data,
                     files={
-                        "metadata": (
-                            None,
-                            json.dumps(metadata),
-                            "application/json",
-                        ),
                         "image": (
                             filename,
                             image_bytes,
