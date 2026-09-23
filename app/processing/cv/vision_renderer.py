@@ -107,13 +107,14 @@ class VisionRenderer:
                 placed,
             )
 
-            for detection in person.ppe:
-                self._draw_ppe_label(
-                    annotated,
-                    detection,
-                    detection.box,
-                    placed,
-                )
+            #for detection in person.ppe:
+            #    self._draw_ppe_label(
+            #       annotated,
+            #       detection,
+            #        detection.box,
+            #       placed,
+            
+            #    )
 
         success, encoded = cv2.imencode(
             ".jpg",

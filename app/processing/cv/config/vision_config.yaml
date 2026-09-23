@@ -1,9 +1,7 @@
 device:
   prefer_cuda: true
 
-
 models:
-
   person:
     path: "weights/yolov8x.pt"
     confidence: 0.15
@@ -15,36 +13,58 @@ models:
     keep_best_per_class: true
     min_person_overlap: 0.3
 
-
 classes:
-
   ppe:
     helmet: "helmet"
     vest: "vest"
     boots: "boots"
 
-
 sahi:
+  "default":
+    target_size: 640
+    overlap_width: 0.20
+    overlap_height: 0.20
+    overlap: 0.20
+    merge_iou: 0.45
+    second_stage_merge_enabled: false
+    second_stage_merge_ios: 0.70
 
-  num_cols: 4
-  num_rows: 3
-  target_size: 640
-  overlap_width: 0.20
-  overlap_height: 0.20
-  overlap: 0.10
-  merge_iou: 0.45
-
+  cameras:
+    "12846":
+      target_size: 640
+      overlap_width: 0.20
+      overlap_height: 0.20
+      overlap: 0.20
+      merge_iou: 0.45
+      second_stage_merge_enabled: false
+      second_stage_merge_ios: 0.70
+      person_confidence: 0.34
+    "12875":
+      target_size: 1200
+      overlap_width: 0.20
+      overlap_height: 0.20
+      overlap: 0.20
+      merge_iou: 0.45
+      second_stage_merge_enabled: false
+      second_stage_merge_ios: 0.70
+      person_confidence: 0.41
+    "12990":
+      target_size: 800
+      overlap_width: 0.20
+      overlap_height: 0.20
+      overlap: 0.20
+      merge_iou: 0.45
+      second_stage_merge_enabled: false
+      second_stage_merge_ios: 0.70
+      person_confidence: 0.33
 
 crop:
-
   width: 512
   height: 640
 
   scale_padding: 1.40
 
-
 colors:
-
   compliant: [0, 255, 0]
   non_compliant: [0, 0, 255]
 

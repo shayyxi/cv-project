@@ -71,7 +71,8 @@ class ProcessingService:
             self._image_validator.validate(cropped_image_bytes)
 
             vision_result = self._vision_engine.process_image(
-                cropped_image_bytes
+                cropped_image_bytes,
+                camera_id=image_job.camera_id,
             )
 
             vision_result = self._image_cropper.translate_result_to_original(
