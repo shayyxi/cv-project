@@ -195,7 +195,8 @@ class TestProcessingService:
         )
 
         self.vision_engine.process_image.assert_called_once_with(
-            self.cropped_bytes
+            self.cropped_bytes,
+            camera_id=self.image_job.camera_id,
         )
 
         self.image_cropper.translate_result_to_original.assert_called_once_with(

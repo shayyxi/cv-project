@@ -69,23 +69,29 @@ class PPEVisionEngine(VisionEngine):
     def process_image(
         self,
         image_bytes: bytes,
+        camera_id: str,
     ) -> VisionResultDTO:
 
+        sahi_settings = self._resolve_sahi_settings(camera_id)
         image = self._decode_image(image_bytes)
 
         image_height, image_width = image.shape[:2]        #keep this line might need this for later
+        print("********************************************************")
+        print(f"Image dimensions: {image_width}x{image_height}")
+        raw_persons = self._detect_persons(image, sahi_settings)
+            #persons = self._merge_persons(
+            #raw_persons,
+            #self._merge_iou,
+        #)
 
-
-        raw_persons = self._detect_persons(image)
-
-
-        persons = self._merge_persons(
-            raw_persons,
-            self._merge_iou,
-        )
-
-        persons = self._filter_person_shapes(persons)
-
+        #persons = self._filter_person_shapes(persons)
+        persons = [
+            (
+                list(map(int, obj.bbox.to_xyxy())),
+                float(obj.score.value),
+            )
+            for obj in raw_persons
+        ]
         detections = []
 
 
@@ -201,7 +207,29 @@ class PPEVisionEngine(VisionEngine):
             encoding="utf-8",
         ) as f:
             return yaml.safe_load(f)
+        
+    def _resolve_sahi_settings(self, camera_id: str) -> dict:
+        settings = self._sahi_cameras.get(str(camera_id))
 
+        if settings is None:
+            logger.warning(
+                "[SAHI_CONFIG] No settings for camera_id=%s, using default",
+                camera_id,
+            )
+            settings = self._sahi_default
+
+        if settings["person_confidence"] < self._person_confidence:
+            logger.warning(
+                "[SAHI_CONFIG] camera_id=%s person_confidence=%.2f is below "
+                "model floor=%.2f; detections below the floor are already "
+                "discarded and cannot be recovered here.",
+                camera_id,
+                settings["person_confidence"],
+                self._person_confidence,
+            )
+
+        return settings
+    
     def _load_settings(self) -> None:
 
         models = self._config["models"]
@@ -238,34 +266,13 @@ class PPEVisionEngine(VisionEngine):
 
         sahi = self._config["sahi"]
 
-        self._num_cols = int(
-            sahi.get("num_cols")
-        )
+        self._sahi_default = sahi["default"]
+        self._sahi_cameras = {
+            str(camera_id): settings
+            for camera_id, settings in sahi.get("cameras", {}).items()
+        }
 
-        self._num_rows = int(
-            sahi.get("num_rows")
-        )
-
-
-        self._overlap_width = float(
-            sahi.get("overlap_width")
-        )
-
-        self._overlap_height = float(
-            sahi.get("overlap_height")
-        )
-
-        self._merge_iou = float(
-            sahi.get("merge_iou")
-        )
-
-        self._target_size = int(
-            sahi.get("target_size")
-        )
-        self._overlap=float(sahi.get("overlap"))
-
-
-
+    
         crop = self._config["crop"]
 
         self._crop_width = int(
@@ -366,10 +373,7 @@ class PPEVisionEngine(VisionEngine):
         return slice_w, slice_h
 
 
-    def _detect_persons(
-        self,
-        image: np.ndarray,
-    ):
+    def _detect_persons(self, image: np.ndarray, sahi_settings: dict):
 
         height, width = image.shape[:2]
 
@@ -383,24 +387,34 @@ class PPEVisionEngine(VisionEngine):
           #  height // self._num_rows,
         #)
 
-        slice_width,slice_height=self._get_optimal_slice_params(width,height,self._target_size,self._overlap)
+        slice_width, slice_height = self._get_optimal_slice_params(
+            width,
+            height,
+            sahi_settings["target_size"],
+            sahi_settings["overlap"],
+        )
 
         result = get_sliced_prediction(
             image,
             self._person_model,
             slice_height=slice_height,
             slice_width=slice_width,
-            overlap_height_ratio=self._overlap,
-            overlap_width_ratio=self._overlap,
+            overlap_height_ratio=sahi_settings["overlap"],
+            overlap_width_ratio=sahi_settings["overlap"],
             perform_standard_pred=False,
-        )
 
-        return [
+            postprocess_type="GREEDYNMM",
+            postprocess_match_metric="IOS",
+            postprocess_match_threshold=0.15,
+        )
+        person_confidence = sahi_settings["person_confidence"]
+        preds = [
             obj
             for obj in result.object_prediction_list
-            if obj.category.id == 0
+            if obj.category.id == 0 and obj.score.value >= person_confidence
         ]
-
+        return preds 
+    
     def _merge_persons(
         self,
         persons,
