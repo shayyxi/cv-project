@@ -202,3 +202,19 @@ def test_optional_service_failure_does_not_block_report(tmp_path: Path) -> None:
     ).generate_report(days=7, today=TODAY)
 
     assert path.exists()
+
+
+class CameraAwareRisk(FakeRisk):
+    """Project-wide forecast plus per-camera ones; one camera too new."""
+
+    def for_camera(self, camera_id: str):
+        return PendingRisk() if camera_id == "12846" else FakeRisk()
+
+
+def test_report_with_per_camera_forecast(tmp_path: Path) -> None:
+    service = _service(_history(), tmp_path, risk_service=CameraAwareRisk())
+
+    path = service.generate_report(days=7, today=TODAY)
+
+    assert path.exists()
+    assert _page_count(path) >= 2

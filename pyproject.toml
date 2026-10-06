@@ -24,6 +24,9 @@ dependencies = [
     "reportlab",
     "matplotlib",
     "scikit-learn",
+    "roboflow",
+    "streamlit",
+    "streamlit-image-coordinates",
 ]
 
 [project.optional-dependencies]

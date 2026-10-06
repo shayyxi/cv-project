@@ -80,19 +80,22 @@ class ProcessingService:
                 crop_region=crop_region,
             )
 
-            annotated_image_bytes = self._vision_renderer.draw_original(
-                image_bytes=raw_image_bytes,
-                result=vision_result,
-            )
+            
 
             processed_image_bytes = self._privacy_service.apply_privacy_blur(
-                image_bytes=annotated_image_bytes,
+                image_bytes=raw_image_bytes,
                 vision_result=vision_result,
+            )
+
+
+            annotated_image_bytes = self._vision_renderer.draw_original(
+                image_bytes=processed_image_bytes,
+                result=vision_result,
             )
 
             processed_path = self._object_storage.save_processed_image(
                 camera_id=image_job.camera_id,
-                image_bytes=processed_image_bytes,
+                image_bytes=annotated_image_bytes,
             )
 
             self._detection_repository.create_many(

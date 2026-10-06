@@ -97,19 +97,38 @@ class RiskService:
     Predictive risk scoring: a gradient-boosted model trained on the
     detection history predicts tomorrow's violation count, scaled
     into a 0-100 daily risk score against the project's worst day.
+
+    Without a camera_id the history of all cameras is combined and
+    the model is saved as models/risk_model.joblib. With a camera_id
+    only that camera's days are used and the model is saved as
+    models/risk_model_<camera_id>.joblib, so each camera gets its own
+    forecast scaled to its own worst day.
     """
 
     def __init__(
         self,
         repository: AnalyticsRepository,
+        camera_id: str | None = None,
     ) -> None:
         self._repository = repository
+        self._camera_id = str(camera_id) if camera_id is not None else None
+
+        file_name = (
+            "risk_model.joblib"
+            if self._camera_id is None
+            else f"risk_model_{self._camera_id}.joblib"
+        )
 
         self._model_path = (
             settings.local_analytics_dir
             / "models"
-            / "risk_model.joblib"
+            / file_name
         )
+
+    def for_camera(self, camera_id: str) -> "RiskService":
+        """A service scoped to one camera, sharing this repository."""
+
+        return RiskService(self._repository, camera_id=camera_id)
 
     def train(
         self,
@@ -294,8 +313,14 @@ class RiskService:
     # ==================================================================
 
     def _features(self) -> list[dict]:
+        rows = (
+            self._repository.daily_stats()
+            if self._camera_id is None
+            else self._repository.daily_stats(camera_id=self._camera_id)
+        )
+
         return build_daily_features(
-            self._repository.daily_stats(),
+            rows,
             mean_hours=self._repository.daily_mean_hours(),
         )
 

@@ -86,3 +86,44 @@ def test_details_agree_with_score_and_describe_the_fit(
         entry["actual"] for entry in details["backtest"]
     )
     assert details["mean_absolute_error"] >= 0
+
+
+class TwoCameraRepository(FakeRepository):
+    """The same series on two cameras; the second has extra helmet violations."""
+
+    def daily_stats(self, since=None, day=None, camera_id=None) -> list[dict]:
+        rows = []
+
+        for camera, extra in (("12990", 0), ("12846", 3)):
+            for row in super().daily_stats():
+                copy = dict(row)
+                copy["camera_id"] = camera
+                copy["helmet_viol"] += extra
+                rows.append(copy)
+
+        return [
+            row for row in rows
+            if camera_id is None or row["camera_id"] == camera_id
+        ]
+
+
+def test_camera_scoped_service_uses_its_own_history_and_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "local_analytics_dir", tmp_path)
+
+    repository = TwoCameraRepository(20)
+    overall = RiskService(repository)
+    camera = overall.for_camera("12846")
+
+    details = camera.details()
+
+    assert details["available"] is True
+    assert (tmp_path / "models" / "risk_model_12846.joblib").exists()
+    assert not (tmp_path / "models" / "risk_model.joblib").exists()
+
+    # Only that camera's days: crew is one camera's workers, not both.
+    camera_rows = repository.daily_stats(camera_id="12846")
+    assert details["latest"]["crew"] == camera_rows[-1]["workers"]
+    assert overall.details()["latest"]["crew"] == 2 * camera_rows[-1]["workers"]
+    assert (tmp_path / "models" / "risk_model.joblib").exists()

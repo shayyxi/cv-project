@@ -39,9 +39,75 @@ services:
     env_file:
       - .env
 
+    # Write to the mounted volume (/data), not to /app/data inside the
+    # container, so frames and the label queue survive a rebuild and
+    # are visible to the retrain-ui service.
+    environment:
+      LOCAL_RAW_DIR: /data/raw
+      LOCAL_PROCESSED_DIR: /data/processed
+      LOCAL_FAILED_DIR: /data/failed
+      LOCAL_ANALYTICS_DIR: /data/analytics
+
     volumes:
       - ./data:/data
       - ./app/processing/cv/weights:/app/app/processing/cv/weights:ro
+      # Crop regions saved from the retrain-ui page land here; the
+      # cropper re-reads the file when it changes, no restart needed.
+      - ./app/processing/Image_cropper/config:/app/app/processing/Image_cropper/config:ro
+
+  # Streamlit page with the Upload / Train buttons (scripts/retrain_ui.py).
+  # Not published on a host port: Caddy below is the only way in.
+  # After the Train button installs a new best.pt, run:
+  #   docker compose restart app
+  retrain-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      LOCAL_RAW_DIR: /data/raw
+      LOCAL_PROCESSED_DIR: /data/processed
+      LOCAL_FAILED_DIR: /data/failed
+      LOCAL_ANALYTICS_DIR: /data/analytics
+
+    volumes:
+      - ./data:/data
+      # Read-write: installing a new model writes best.pt here.
+      - ./app/processing/cv/weights:/app/app/processing/cv/weights
+      # Read-write: the crop-region marker saves image_crop_config.yaml here.
+      - ./app/processing/Image_cropper/config:/app/app/processing/Image_cropper/config
+
+    command: >
+      python -m streamlit run scripts/retrain_ui.py
+      --server.address 0.0.0.0
+      --server.port 8501
+      --server.headless true
+      --browser.gatherUsageStats false
+
+  # HTTPS + password in front of the retraining page. Edit ./Caddyfile
+  # (domain, user, password hash) before the first start.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+
+    depends_on:
+      - retrain-ui
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
 
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:

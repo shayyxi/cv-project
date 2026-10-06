@@ -1,0 +1,31 @@
+# Caddy in front of the Streamlit retraining page (docker-compose service
+# "caddy" -> "retrain-ui"). Caddy gets the HTTPS certificate from
+# Let's Encrypt by itself and proxies the WebSocket Streamlit needs.
+#
+# Setup:
+#   1. Point a DNS A record for your domain at this server and open
+#      ports 80 and 443 in the firewall. Port 8501 stays closed.
+#   2. Make a password hash (bcrypt):
+#        docker compose run --rm caddy caddy hash-password --plaintext 'your-password'
+#   3. Replace the domain, the user name and the hash below, then:
+#        docker compose up -d
+#   4. Open https://retrain.yourdomain.com and log in.
+
+retrain.yourdomain.com {
+    basic_auth {
+        admin $2a$14$REPLACE_WITH_THE_HASH_FROM_STEP_2
+    }
+
+    reverse_proxy retrain-ui:8501
+}
+
+# No domain (office network only)? Replace the block above with this
+# one: plain HTTP on port 80 at http://<server-ip>, same password.
+#
+# :80 {
+#     basic_auth {
+#         admin $2a$14$REPLACE_WITH_THE_HASH_FROM_STEP_2
+#     }
+#
+#     reverse_proxy retrain-ui:8501
+# }

@@ -190,6 +190,7 @@
 
 
 ################################################################################
+import logging
 from pathlib import Path
 
 import cv2
@@ -200,6 +201,14 @@ from app.dto import (
     PointDTO,
     ProcessingRegionDTO,
     VisionResultDTO,
+)
+
+logger = logging.getLogger(__name__)
+
+CONFIG_PATH = (
+    Path(__file__).resolve().parent
+    / "config"
+    / "image_crop_config.yaml"
 )
 
 
@@ -218,9 +227,48 @@ class ImageCropper:
     """
 
     def __init__(self):
-        self._config = self._load_config()
+        self._config_path = CONFIG_PATH
 
-        self._regions = self._config.get("regions", {})
+        self._config = self._load_config(self._config_path) or {}
+
+        self._regions = self._config.get("regions", {}) or {}
+
+        self._config_mtime = self._config_path.stat().st_mtime
+
+    def _reload_config_if_changed(self) -> None:
+        """
+        Re-read image_crop_config.yaml when its modification time has
+        changed, so a polygon saved from the retraining page is used
+        for the next frame without a restart. An unreadable or invalid
+        file (for example, half-written) keeps the last good config.
+        """
+
+        try:
+            mtime = self._config_path.stat().st_mtime
+        except OSError:
+            return
+
+        if mtime == self._config_mtime:
+            return
+
+        try:
+            config = self._load_config(self._config_path) or {}
+        except (OSError, yaml.YAMLError):
+            logger.warning(
+                "Could not reload %s - keeping the previous crop regions.",
+                self._config_path,
+            )
+            return
+
+        self._config = config
+        self._regions = config.get("regions", {}) or {}
+        self._config_mtime = mtime
+
+        logger.info(
+            "Crop regions reloaded from %s (%d cameras).",
+            self._config_path,
+            len(self._regions),
+        )
 
     # ==================================================================
     # Public API
@@ -407,8 +455,11 @@ class ImageCropper:
         camera_id: str,
     ):
         """
-        Return the configured polygon for a camera.
+        Return the configured polygon for a camera, from the current
+        contents of the config file.
         """
+
+        self._reload_config_if_changed()
 
         camera_config = self._regions.get(
             str(camera_id)
@@ -435,13 +486,9 @@ class ImageCropper:
         ]
 
     @staticmethod
-    def _load_config():
+    def _load_config(config_path: Path | None = None):
 
-        config_path = (
-            Path(__file__).resolve().parent
-            / "config"
-            / "image_crop_config.yaml"
-        )
+        config_path = config_path or CONFIG_PATH
 
         with config_path.open(
             "r",

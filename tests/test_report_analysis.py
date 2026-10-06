@@ -179,7 +179,7 @@ def test_analyze_compares_periods_and_lists_coverage_gaps() -> None:
     assert analysis["best_day"]["day"] == TODAY
 
 
-def test_findings_call_out_systemic_classes_and_no_prior() -> None:
+def test_findings_skip_per_class_rates_and_note_no_prior() -> None:
     rows = [
         _row(TODAY, camera="12990", workers=20, helmet=5, vest=20, boots=20),
         _row(TODAY - timedelta(days=1), camera="12875", workers=5, vest=5, boots=5),
@@ -189,8 +189,9 @@ def test_findings_call_out_systemic_classes_and_no_prior() -> None:
     text = " ".join(findings)
 
     assert "No data exists for the prior 7-day period" in text
-    assert "Missing vest and boots was flagged on virtually every sighting" in text
-    assert "Missing helmet was flagged on 20% of sightings (5 of 25)" in text
+    # Per-class "Missing <item> was flagged on ..." lines are not
+    # findings any more; the class table and chart carry those numbers.
+    assert "was flagged" not in text
     assert "Camera 12990 accounted for 82% of all violations" in text
     assert "No worker sighting was fully compliant" in text
     assert "risk forecast is not available" in text

@@ -131,6 +131,8 @@ class ReportService:
             today_score=today_score,
         )
 
+        analysis["risk_by_camera"] = self._risk_by_camera(rows)
+
         heatmaps = self._heatmaps(analysis["cameras"], days)
 
         charts = build_charts(analysis)
@@ -174,6 +176,47 @@ class ReportService:
         except Exception:
             logger.exception("Risk forecast unavailable")
             return None
+
+    def _risk_by_camera(self, rows: list[dict]) -> list[dict]:
+        """
+        Tomorrow's forecast per camera, from a risk service scoped to
+        each camera in the history (RiskService.for_camera). Empty when
+        there is no risk service or it cannot be scoped; a camera whose
+        forecast fails is skipped.
+        """
+
+        if self._risk_service is None:
+            return []
+
+        for_camera = getattr(self._risk_service, "for_camera", None)
+
+        if for_camera is None:
+            return []
+
+        forecasts = []
+
+        for camera_id in sorted({str(row["camera_id"]) for row in rows}):
+            try:
+                details = for_camera(camera_id).details()
+            except Exception:
+                logger.exception(
+                    "Risk forecast unavailable for camera %s", camera_id
+                )
+                continue
+
+            forecasts.append(
+                {
+                    "camera_id": camera_id,
+                    "available": bool(details.get("available")),
+                    "min_days": details.get("min_days", RISK_MODEL_MIN_DAYS),
+                    "training_days": details.get("training_days"),
+                    "predicted_violations": details.get("predicted_violations"),
+                    "risk_score": details.get("risk_score"),
+                    "worst_day": details.get("worst_day"),
+                }
+            )
+
+        return forecasts
 
     def _heatmaps(
         self,
@@ -774,6 +817,52 @@ class _PdfBuilder:
             ]
 
         elements: list = [KeepTogether(lead)]
+
+        per_camera = a.get("risk_by_camera") or []
+
+        if per_camera:
+            rows = []
+
+            for entry in per_camera:
+                if entry["available"]:
+                    rows.append(
+                        [
+                            entry["camera_id"],
+                            f"{entry['predicted_violations']:.0f}",
+                            f"{entry['risk_score']:.0f}/100",
+                        ]
+                    )
+                else:
+                    have = entry.get("training_days")
+                    note = f"needs {entry['min_days']} days"
+
+                    if have is not None:
+                        note += f" (has {have})"
+
+                    rows.append([entry["camera_id"], note, "-"])
+
+            elements.append(
+                KeepTogether(
+                    [
+                        self._p("Per camera", "h3"),
+                        self._table(
+                            [
+                                "Camera",
+                                f"Expected violations {tomorrow.isoformat()}",
+                                "Risk score",
+                            ],
+                            rows,
+                            col_widths=[3 * cm, 5.5 * cm, 3 * cm],
+                        ),
+                        self._p(
+                            "Each camera has its own model trained on that "
+                            "camera's history; its score scales to 100 at "
+                            "that camera's worst day on record.",
+                            "caption",
+                        ),
+                    ]
+                )
+            )
 
         latest = risk.get("latest")
         labels = risk.get("feature_labels") or {}

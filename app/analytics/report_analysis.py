@@ -21,10 +21,6 @@ PPE_CLASSES = ("helmet", "vest", "boots")
 # linear fit) below which the trend is reported as flat.
 FLAT_TREND_THRESHOLD = 0.10
 
-# Share of sightings at or above which a missing item is called out
-# as systemic (site-wide gap or detector limitation).
-SYSTEMIC_MISSING_RATE = 0.95
-
 # Distinct logged days needed before a weekday pattern is reported.
 MIN_DAYS_FOR_WEEKDAY_PATTERN = 14
 
@@ -619,42 +615,8 @@ def _period_findings(
             f"{current['workers']})."
         )
 
-    # Per-class rates, with systemic classes called out together.
-    systemic = [
-        c
-        for c in analysis["classes"]
-        if c["missing_rate"] is not None
-        and c["missing_rate"] >= SYSTEMIC_MISSING_RATE
-    ]
-
-    if systemic:
-        names = _join(c["name"] for c in systemic)
-        rates = ", ".join(
-            f"{c['name']} {_pct(c['missing_rate'])}" for c in systemic
-        )
-
-        findings.append(
-            f"Missing {names} was flagged on virtually every sighting "
-            f"({rates}). A rate this high usually means either a "
-            "site-wide gap or a detector limitation (an item hidden at "
-            "this camera distance); spot-check a few frames before "
-            "acting on it."
-        )
-
-    for ppe_class in analysis["classes"]:
-        if ppe_class in systemic or ppe_class["missing_rate"] is None:
-            continue
-
-        text = (
-            f"Missing {ppe_class['name']} was flagged on "
-            f"{_pct(ppe_class['missing_rate'])} of sightings "
-            f"({ppe_class['count']} of {current['workers']})"
-        )
-
-        if ppe_class["change_pct"] is not None:
-            text += f", {ppe_class['change_pct']:+.0f}% vs the prior period"
-
-        findings.append(text + ".")
+    # Per-class rates are in the PPE class table and chart; they are
+    # not repeated as findings.
 
     # Cameras.
     cameras = [c for c in analysis["cameras"] if c["workers"]]
