@@ -28,6 +28,7 @@ from matplotlib.ticker import MaxNLocator  # noqa: E402
 from app.analytics.report_analysis import (  # noqa: E402
     MIN_DAYS_FOR_WEEKDAY_PATTERN,
     PPE_CLASSES,
+    violations_label,
 )
 
 CLASS_COLORS = {
@@ -49,6 +50,13 @@ SURFACE = "#ffffff"
 # Figure width in inches: the PDF text column is 17 cm.
 FIGURE_WIDTH = 6.7
 DPI = 200
+
+# Per-camera risk fit: height of one panel in inches, and the most
+# panels in one figure. At column width, four 1.8 in panels come to
+# roughly 20 cm; more would not fit an A4 frame and the PDF build
+# fails on an image taller than the page.
+RISK_PANEL_HEIGHT = 1.8
+MAX_RISK_PANELS = 4
 
 RC = {
     "font.family": "sans-serif",
@@ -606,103 +614,138 @@ def weekday_chart(weekdays: list[dict]) -> bytes:
         return _render(fig)
 
 
-def risk_chart(
+def _draw_risk_panel(
+    ax,
     backtest: list[dict],
     forecast_day: date,
     predicted: float,
     worst_day: dict | None,
+) -> None:
+    """
+    One camera: actual daily violations against the model's
+    in-sample prediction for each day, extended with tomorrow's
+    forecast.
+    """
+
+    xs = [mdates.date2num(entry["day"]) for entry in backtest]
+    actual = [entry["actual"] for entry in backtest]
+    fitted = [entry["predicted"] for entry in backtest]
+
+    marker_style = {
+        "marker": "o",
+        "markersize": 4,
+        "markeredgecolor": SURFACE,
+        "markeredgewidth": 1.0,
+        "linewidth": 2,
+        "solid_capstyle": "round",
+        "solid_joinstyle": "round",
+    }
+
+    ax.plot(xs, actual, color=MUTED, **marker_style)
+    ax.plot(xs, fitted, color=ACCENT, **marker_style)
+
+    forecast_x = mdates.date2num(forecast_day)
+
+    ax.plot(
+        [xs[-1], forecast_x],
+        [fitted[-1], predicted],
+        color=ACCENT,
+        linewidth=1.5,
+        linestyle=(0, (3, 3)),
+    )
+    ax.plot(
+        forecast_x,
+        predicted,
+        marker="o",
+        markersize=7,
+        color=SURFACE,
+        markeredgecolor=ACCENT,
+        markeredgewidth=2,
+        linestyle="none",
+    )
+    _label(ax, forecast_x, predicted, f"{predicted:.0f}", dy=7)
+
+    ceiling = max(max(actual), max(fitted), predicted, 1.0)
+
+    if worst_day:
+        ax.axhline(worst_day["violations"], color=BASELINE, linewidth=0.8)
+        ceiling = max(ceiling, worst_day["violations"])
+
+    ax.set_ylim(0, ceiling * 1.25)
+    _integer_ticks(ax)
+
+    _date_axis(ax, backtest[0]["day"], forecast_day)
+
+
+def _risk_legend_handles() -> list:
+    return [
+        Line2D([], [], color=MUTED, linewidth=2, label="actual"),
+        Line2D([], [], color=ACCENT, linewidth=2, label="model fit"),
+        Line2D(
+            [],
+            [],
+            marker="o",
+            markersize=6,
+            color=SURFACE,
+            markeredgecolor=ACCENT,
+            markeredgewidth=1.5,
+            linestyle="none",
+            label="forecast for tomorrow",
+        ),
+        Line2D(
+            [],
+            [],
+            color=BASELINE,
+            linewidth=1,
+            label="camera's worst day on record",
+        ),
+    ]
+
+
+def risk_chart(
+    cameras: list[dict],
+    forecast_day: date,
 ) -> bytes:
     """
-    Actual daily violations against the model's in-sample
-    prediction for each day, extended with tomorrow's forecast.
+    One panel per camera, in the order given (highest risk first):
+    the model's in-sample fit over that camera's history and its
+    forecast for tomorrow. Each camera dict needs camera_id,
+    risk_score, predicted_violations, backtest and worst_day.
     """
 
     with plt.rc_context(RC):
-        fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, 2.6))
-
-        xs = [mdates.date2num(entry["day"]) for entry in backtest]
-        actual = [entry["actual"] for entry in backtest]
-        fitted = [entry["predicted"] for entry in backtest]
-
-        marker_style = {
-            "marker": "o",
-            "markersize": 4,
-            "markeredgecolor": SURFACE,
-            "markeredgewidth": 1.0,
-            "linewidth": 2,
-            "solid_capstyle": "round",
-            "solid_joinstyle": "round",
-        }
-
-        ax.plot(xs, actual, color=MUTED, **marker_style)
-        ax.plot(xs, fitted, color=ACCENT, **marker_style)
-
-        forecast_x = mdates.date2num(forecast_day)
-
-        ax.plot(
-            [xs[-1], forecast_x],
-            [fitted[-1], predicted],
-            color=ACCENT,
-            linewidth=1.5,
-            linestyle=(0, (3, 3)),
+        fig, axes = plt.subplots(
+            len(cameras),
+            1,
+            figsize=(FIGURE_WIDTH, 0.6 + RISK_PANEL_HEIGHT * len(cameras)),
+            squeeze=False,
+            gridspec_kw={"hspace": 0.75},
         )
-        ax.plot(
-            forecast_x,
-            predicted,
-            marker="o",
-            markersize=7,
-            color=SURFACE,
-            markeredgecolor=ACCENT,
-            markeredgewidth=2,
-            linestyle="none",
-        )
-        _label(ax, forecast_x, predicted, f"{predicted:.0f}", dy=7)
 
-        handles = [
-            Line2D([], [], color=MUTED, linewidth=2, label="actual"),
-            Line2D([], [], color=ACCENT, linewidth=2, label="model fit"),
-            Line2D(
-                [],
-                [],
-                marker="o",
-                markersize=6,
-                color=SURFACE,
-                markeredgecolor=ACCENT,
-                markeredgewidth=1.5,
-                linestyle="none",
-                label="forecast for tomorrow",
-            ),
-        ]
-
-        ceiling = max(max(actual), max(fitted), predicted, 1.0)
-
-        if worst_day:
-            ax.axhline(worst_day["violations"], color=BASELINE, linewidth=0.8)
-            ceiling = max(ceiling, worst_day["violations"])
-            handles.append(
-                Line2D(
-                    [],
-                    [],
-                    color=BASELINE,
-                    linewidth=1,
-                    label=f"worst day on record ({worst_day['violations']})",
-                )
+        for index, (ax, camera) in enumerate(zip(axes[:, 0], cameras)):
+            _draw_risk_panel(
+                ax,
+                camera["backtest"],
+                forecast_day,
+                camera["predicted_violations"],
+                camera.get("worst_day"),
             )
 
-        ax.set_ylim(0, ceiling * 1.25)
-        _integer_ticks(ax)
+            ax.set_title(
+                f"camera {camera['camera_id']}: risk "
+                f"{camera['risk_score']:.0f}/100, about "
+                f"{violations_label(camera['predicted_violations'])} tomorrow",
+                pad=16 if index == 0 else 4,
+            )
 
-        ax.set_title("Model fit and forecast: violations per day", pad=16)
-
-        ax.legend(
-            handles=handles,
-            loc="lower left",
-            bbox_to_anchor=(0.0, 1.0),
-            ncol=4,
-            borderaxespad=0.0,
-        )
-
-        _date_axis(ax, backtest[0]["day"], forecast_day)
+            if index == 0:
+                ax.legend(
+                    handles=_risk_legend_handles(),
+                    loc="lower left",
+                    bbox_to_anchor=(0.0, 1.0),
+                    ncol=4,
+                    borderaxespad=0.0,
+                )
 
         return _render(fig)
 
@@ -767,15 +810,24 @@ def build_charts(analysis: dict) -> dict[str, bytes]:
     risk = analysis.get("risk") or {}
 
     if analysis.get("risk_available"):
-        # Cap the fit chart at two months so a long history stays legible.
-        backtest = risk.get("backtest") or []
+        ready = sorted(
+            (
+                camera
+                for camera in risk.get("cameras") or []
+                if camera.get("available") and camera.get("backtest")
+            ),
+            key=lambda camera: (-camera["risk_score"], str(camera["camera_id"])),
+        )[:MAX_RISK_PANELS]
 
-        if backtest:
+        if ready:
             charts["risk"] = risk_chart(
-                backtest[-60:],
+                [
+                    # Cap each fit at two months so a long history
+                    # stays legible.
+                    {**camera, "backtest": camera["backtest"][-60:]}
+                    for camera in ready
+                ],
                 analysis["today"] + timedelta(days=1),
-                risk["predicted_violations"],
-                risk.get("worst_day"),
             )
 
         if risk.get("feature_importances"):

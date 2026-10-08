@@ -21,15 +21,14 @@ PPE_CLASSES = ("helmet", "vest", "boots")
 # linear fit) below which the trend is reported as flat.
 FLAT_TREND_THRESHOLD = 0.10
 
-# Share of sightings at or above which a missing item is called out
-# as systemic (site-wide gap or detector limitation).
-SYSTEMIC_MISSING_RATE = 0.95
-
 # Distinct logged days needed before a weekday pattern is reported.
 MIN_DAYS_FOR_WEEKDAY_PATTERN = 14
 
-# History the risk model needs before it can forecast.
+# History the risk model needs before it can forecast, and logged
+# days a single camera needs before it gets its own forecast. The
+# RiskService reports the live values; these are the fallbacks.
 RISK_MODEL_MIN_DAYS = 14
+RISK_CAMERA_MIN_DAYS = 7
 
 
 def _int(value) -> int:
@@ -428,9 +427,10 @@ def analyze(
         "repeat_flags": list(repeat_flags or []),
         "repeat_threshold": repeat_threshold,
         "risk": risk,
-        # RiskService.details() always returns a dict; the score is
-        # None until the model has enough history to train.
-        "risk_available": bool(risk and risk.get("risk_score") is not None),
+        # RiskService.details() always returns a dict; "available" is
+        # False until the model has enough history to train. Per-camera
+        # forecasts live in risk["cameras"] and may still be pending.
+        "risk_available": bool(risk and risk.get("available")),
         "today_score": today_score,
         "rows": sorted(
             current_rows,
@@ -450,6 +450,14 @@ def analyze(
 
 def _pct(value: float) -> str:
     return f"{100.0 * value:.0f}%"
+
+
+def violations_label(count: float) -> str:
+    """'1 violation' / '4 violations', from a rounded count."""
+
+    rounded = round(count)
+
+    return f"{rounded:.0f} violation{'' if rounded == 1 else 's'}"
 
 
 def _join(items) -> str:
@@ -529,24 +537,7 @@ def build_findings(analysis: dict) -> list[str]:
     risk = analysis["risk"] or {}
 
     if analysis["risk_available"]:
-        text = (
-            f"The risk model forecasts about "
-            f"{risk['predicted_violations']:.0f} violations tomorrow "
-            f"(risk score {risk['risk_score']}/100 against the worst day "
-            "on record)."
-        )
-
-        importances = risk.get("feature_importances") or {}
-        labels = risk.get("feature_labels") or {}
-
-        if importances:
-            top = sorted(importances, key=importances.get, reverse=True)[:2]
-            text += (
-                " It leans most on "
-                f"{_join(labels.get(name, name) for name in top)}."
-            )
-
-        findings.append(text)
+        findings.append(_risk_finding(risk))
     else:
         min_days = risk.get("min_days", RISK_MODEL_MIN_DAYS)
         logged = risk.get("training_days")
@@ -558,6 +549,80 @@ def build_findings(analysis: dict) -> list[str]:
         )
 
     return findings
+
+
+def _risk_finding(risk: dict) -> str:
+    """One bullet covering every camera's forecast for tomorrow."""
+
+    cameras = risk.get("cameras") or []
+    camera_min_days = risk.get("camera_min_days", RISK_CAMERA_MIN_DAYS)
+
+    ready = sorted(
+        (c for c in cameras if c.get("available")),
+        key=lambda c: (
+            -c["risk_score"],
+            -c["predicted_violations"],
+            str(c["camera_id"]),
+        ),
+    )
+    pending = [c for c in cameras if not c.get("available")]
+
+    if not ready:
+        if not pending:
+            return (
+                "The risk model is trained, but there is no logged history "
+                "to forecast from yet."
+            )
+
+        if len(pending) == 1:
+            only = pending[0]
+
+            return (
+                f"The risk model is trained, but camera {only['camera_id']} "
+                f"has {only['history_days']} of the {camera_min_days} "
+                "logged days needed for a forecast."
+            )
+
+        listed = _join(
+            f"camera {c['camera_id']} has {c['history_days']}" for c in pending
+        )
+
+        return (
+            "The risk model is trained, but no camera has the "
+            f"{camera_min_days} logged days needed for a forecast yet: "
+            f"{listed}."
+        )
+
+    text = "Tomorrow's risk forecast by camera: " + ", ".join(
+        f"camera {c['camera_id']} {c['risk_score']:.0f}/100 "
+        f"(~{violations_label(c['predicted_violations'])})"
+        for c in ready
+    ) + "."
+
+    if pending:
+        listed = _join(
+            f"{c['camera_id']} ({c['history_days']} of {camera_min_days} "
+            "logged days)"
+            for c in pending
+        )
+        plural = len(pending) != 1
+
+        text += (
+            f" Camera{'s' if plural else ''} {listed} "
+            f"{'have' if plural else 'has'} no forecast yet."
+        )
+
+    importances = risk.get("feature_importances") or {}
+    labels = risk.get("feature_labels") or {}
+
+    if importances:
+        top = sorted(importances, key=importances.get, reverse=True)[:2]
+        text += (
+            " It leans most on "
+            f"{_join(labels.get(name, name) for name in top)}."
+        )
+
+    return text
 
 
 def _period_findings(
@@ -619,42 +684,8 @@ def _period_findings(
             f"{current['workers']})."
         )
 
-    # Per-class rates, with systemic classes called out together.
-    systemic = [
-        c
-        for c in analysis["classes"]
-        if c["missing_rate"] is not None
-        and c["missing_rate"] >= SYSTEMIC_MISSING_RATE
-    ]
-
-    if systemic:
-        names = _join(c["name"] for c in systemic)
-        rates = ", ".join(
-            f"{c['name']} {_pct(c['missing_rate'])}" for c in systemic
-        )
-
-        findings.append(
-            f"Missing {names} was flagged on virtually every sighting "
-            f"({rates}). A rate this high usually means either a "
-            "site-wide gap or a detector limitation (an item hidden at "
-            "this camera distance); spot-check a few frames before "
-            "acting on it."
-        )
-
-    for ppe_class in analysis["classes"]:
-        if ppe_class in systemic or ppe_class["missing_rate"] is None:
-            continue
-
-        text = (
-            f"Missing {ppe_class['name']} was flagged on "
-            f"{_pct(ppe_class['missing_rate'])} of sightings "
-            f"({ppe_class['count']} of {current['workers']})"
-        )
-
-        if ppe_class["change_pct"] is not None:
-            text += f", {ppe_class['change_pct']:+.0f}% vs the prior period"
-
-        findings.append(text + ".")
+    # Per-class missing rates stay in the "Violations by PPE class"
+    # table; they are deliberately not repeated as findings.
 
     # Cameras.
     cameras = [c for c in analysis["cameras"] if c["workers"]]

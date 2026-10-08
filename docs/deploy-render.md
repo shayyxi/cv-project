@@ -18,7 +18,7 @@ actually is and works forward from there.
 | Model weights (`app/processing/cv/weights/*.pt`, ~150 MB) are gitignored, so they will not be in your repo. | Commit the small custom model (`best.pt`, 19 MB) and download the public `yolov8x.pt` (131 MB) at Docker build time. |
 | `torch` is a bare dependency. On Linux, plain `pip install torch` pulls the multi-GB CUDA build. Render has no GPUs; the engine already falls back to CPU (`_select_device` in `ppe_vision_engine.py`). | Install the **CPU-only** PyTorch wheel first to keep the image small and the build fast. |
 | YOLOv8x + SAHI (4x3 tiles at 1000 px) on CPU, with `torch.set_num_threads(2)` hard-coded. | Use at least a 2 GB instance; 2 CPU / 4 GB is the sensible choice. |
-| Daily jobs fire on the first cycle at or after `REPORT_HOUR` using `datetime.now()` (local time). | Containers run in UTC. Set the `TZ` env var or your report will fire at the wrong hour. |
+| Daily jobs fire on the first cycle at or after `REPORT_HOUR` using `datetime.now()` (local time). The report itself is only generated and delivered Monday to Friday (`REPORT_WEEKDAYS_ONLY`). | Containers run in UTC. Set the `TZ` env var or your report will fire at the wrong hour, and the weekday check will use the wrong day near midnight. |
 
 Resulting architecture:
 
@@ -215,15 +215,16 @@ image anyway). Only `DATABASE_URL` and `CAMERA_IDS` are strictly required.
 | `LOCAL_RAW_DIR` | `/data/raw` | On the disk. |
 | `LOCAL_PROCESSED_DIR` | `/data/processed` | On the disk. |
 | `LOCAL_FAILED_DIR` | `/data/failed` | On the disk. |
-| `LOCAL_ANALYTICS_DIR` | `/data/analytics` | On the disk. Reports, heatmaps, label queue and `risk_model.joblib` live here. |
+| `LOCAL_ANALYTICS_DIR` | `/data/analytics` | On the disk. Reports (`report_<date>.pdf` site-wide plus `report_<date>_camera_<id>.pdf` per camera), heatmaps, label queue and `risk_model.joblib` live here. |
 | `FTP_POLL_INTERVAL_SECONDS` | `60` | Sleep between cycles. |
 | `PROCESSOR_SLEEP_SECONDS` | `5` | |
 | `REPORT_HOUR` | `18` | Local hour (0-23) for daily jobs. |
 | `REPORT_DAYS` | `7` | Days covered by each report. |
-| `REPORT_DELIVER_WEBHOOK` | `false` / `true` | Needs the two WordPress vars below when `true`. |
+| `REPORT_WEEKDAYS_ONLY` | `true` | Generate and deliver the report Monday to Friday only; skipped on Saturday and Sunday. The risk, heatmap and label-queue jobs still run every day. Set `false` to report seven days a week. |
+| `REPORT_DELIVER_WEBHOOK` | `false` / `true` | Needs the two WordPress vars below when `true`. Each PDF (site-wide and per camera) is POSTed separately. |
 | `WORDPRESS_WEBHOOK_URL` | `https://...` | Optional. |
 | `WORDPRESS_API_KEY` | secret | Optional. |
-| `REPORT_DELIVER_EMAIL` | `false` / `true` | Needs the SMTP vars below when `true`. |
+| `REPORT_DELIVER_EMAIL` | `false` / `true` | Needs the SMTP vars below when `true`. One email per run with every PDF attached. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_TO` | as needed | Use port `587` (STARTTLS) or `465`. Outbound port 25 is not usable on Render. |
 
 `POSTGRES_PASSWORD` is only used by `docker-compose.yml` and is not needed here.
@@ -269,7 +270,7 @@ alembic upgrade head
    ls /data/raw /data/processed
    python -m scripts.inspect_db
    python -m scripts.analytics score
-   python -m scripts.analytics report          # generate a PDF on demand
+   python -m scripts.analytics report          # site-wide + per-camera PDFs on demand (--camera ID for one)
    ```
 
 3. **Database** page → *Metrics* shows connections; you can also connect with
@@ -334,6 +335,8 @@ services:
         value: "18"
       - key: REPORT_DAYS
         value: "7"
+      - key: REPORT_WEEKDAYS_ONLY
+        value: "true"
       - key: REPORT_DELIVER_WEBHOOK
         value: "false"
       - key: REPORT_DELIVER_EMAIL

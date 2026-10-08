@@ -13,3 +13,5 @@ def test_settings_load_from_values() -> None:
     assert settings.app_env == "development"
     assert settings.ftp_poll_interval_seconds == 60
     assert isinstance(settings.local_raw_dir, Path)
+    # The report webhook URL is a real setting, not silently dropped.
+    assert settings.wordpress_webhook_url == "https://example.com/webhook"

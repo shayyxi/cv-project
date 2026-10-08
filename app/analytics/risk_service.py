@@ -24,33 +24,45 @@ FEATURE_LABELS = {
 
 DEFAULT_MEAN_HOUR = 12.0
 
+# Logged days a camera needs before it gets its own forecast. Matches
+# the rate_7d window, so the trailing rate is a real seven-day mean.
+CAMERA_MIN_DAYS = 7
 
-def build_daily_features(
+# Bumped whenever a saved model is no longer comparable with what
+# train() produces (version 2: per-camera rows instead of site-wide
+# totals). _load_or_train retrains when the file carries anything else.
+MODEL_VERSION = 2
+
+
+def build_camera_features(
     rows: list[dict],
-    mean_hours: dict[date, float] | None = None,
-) -> list[dict]:
+    mean_hours: dict[tuple[str, date], float] | None = None,
+) -> dict[str, list[dict]]:
     """
     Turn daily_stats rows (one per day per camera) into one feature
-    row per day across all cameras:
+    series per camera, keyed by camera_id and sorted by day:
 
-        crew     - workers seen
-        viol     - total violations
+        crew     - workers seen on that camera
+        viol     - total violations on that camera
         rate     - violations per worker
         dow      - day of week (0 = Monday)
-        hour     - mean capture hour of the day's detections
-                   (time-of-day; noon when unknown)
-        rate_7d  - mean rate over the trailing 7 logged days
+        hour     - mean capture hour of the camera's detections that
+                   day (time-of-day; noon when unknown)
+        rate_7d  - mean rate over the camera's trailing 7 logged days
 
-    Every day except the last also gets next_viol, the following
-    day's violation count (the training target).
+    Every day except the camera's last also gets next_viol, the
+    camera's violation count on its next logged day (the training
+    target). mean_hours is keyed (camera_id, day).
     """
 
     mean_hours = mean_hours or {}
 
-    per_day: dict[date, dict] = {}
+    per_camera: dict[str, dict[date, dict]] = {}
 
     for row in rows:
-        day = per_day.setdefault(
+        camera_id = str(row["camera_id"])
+
+        day = per_camera.setdefault(camera_id, {}).setdefault(
             row["day"],
             {"workers": 0, "viol": 0},
         )
@@ -62,6 +74,17 @@ def build_daily_features(
             + row["boots_viol"]
         )
 
+    return {
+        camera_id: _feature_series(camera_id, per_camera[camera_id], mean_hours)
+        for camera_id in sorted(per_camera)
+    }
+
+
+def _feature_series(
+    camera_id: str,
+    per_day: dict[date, dict],
+    mean_hours: dict[tuple[str, date], float],
+) -> list[dict]:
     features = []
     rates: list[float] = []
 
@@ -76,12 +99,13 @@ def build_daily_features(
 
         features.append(
             {
+                "camera_id": camera_id,
                 "day": day,
                 "crew": info["workers"],
                 "viol": info["viol"],
                 "rate": rate,
                 "dow": day.weekday(),
-                "hour": mean_hours.get(day, DEFAULT_MEAN_HOUR),
+                "hour": mean_hours.get((camera_id, day), DEFAULT_MEAN_HOUR),
                 "rate_7d": sum(window) / len(window),
             }
         )
@@ -94,9 +118,10 @@ def build_daily_features(
 
 class RiskService:
     """
-    Predictive risk scoring: a gradient-boosted model trained on the
-    detection history predicts tomorrow's violation count, scaled
-    into a 0-100 daily risk score against the project's worst day.
+    Predictive risk scoring per camera: one gradient-boosted model is
+    trained on every camera's daily history and applied to each
+    camera's latest logged day to predict its violations tomorrow,
+    scaled into a 0-100 risk score against that camera's worst day.
     """
 
     def __init__(
@@ -116,19 +141,20 @@ class RiskService:
         min_days: int = 14,
     ) -> GradientBoostingRegressor | None:
         """
-        Train and persist the model. Returns None (and logs) when
-        there are fewer than min_days days of history with a known
-        next-day target.
+        Train and persist the model on every camera's rows. Returns
+        None (and logs) when fewer than min_days distinct days have a
+        known next-day target.
         """
 
-        training = [f for f in self._features() if "next_viol" in f]
+        training = self._training_rows(self._features())
+        training_days = self._distinct_days(training)
 
-        if len(training) < min_days:
+        if training_days < min_days:
             logger.info(
                 "Risk model needs >= %d days of history, have %d "
                 "- keep logging.",
                 min_days,
-                len(training),
+                training_days,
             )
             return None
 
@@ -144,10 +170,14 @@ class RiskService:
 
         self._model_path.parent.mkdir(parents=True, exist_ok=True)
 
-        joblib.dump(model, self._model_path)
+        joblib.dump(
+            {"version": MODEL_VERSION, "model": model},
+            self._model_path,
+        )
 
         logger.info(
-            "Risk model trained on %d days -> %s",
+            "Risk model trained on %d days (%d camera-days) -> %s",
+            training_days,
             len(training),
             self._model_path,
         )
@@ -157,43 +187,48 @@ class RiskService:
     def score(
         self,
         min_days: int = 14,
-    ) -> dict | None:
+    ) -> dict[str, dict] | None:
         """
-        Predict tomorrow's violations from the latest day's features.
+        Predict tomorrow's violations for every camera with enough
+        history.
 
-        Returns {"predicted_violations", "risk_score"} or None when
-        no model can be trained yet.
+        Returns {camera_id: {"predicted_violations", "risk_score"}}
+        (empty when the model exists but no camera has CAMERA_MIN_DAYS
+        logged days yet) or None when no model can be trained yet.
         """
 
-        model = self._load_or_train(min_days)
+        details = self.details(min_days)
 
-        if model is None:
+        if not details["available"]:
             return None
 
-        features = self._features()
+        scores: dict[str, dict] = {}
 
-        if not features:
-            return None
+        for camera in details["cameras"]:
+            if not camera["available"]:
+                logger.info(
+                    "Camera %s has %d of the %d logged days needed for "
+                    "a forecast.",
+                    camera["camera_id"],
+                    camera["history_days"],
+                    CAMERA_MIN_DAYS,
+                )
+                continue
 
-        predicted = self._predict(model, features)[-1]
+            logger.info(
+                "Camera %s predicted violations tomorrow: %.1f "
+                "-> risk score %s/100",
+                camera["camera_id"],
+                camera["predicted_violations"],
+                camera["risk_score"],
+            )
 
-        worst_day = max(
-            (row["viol"] for row in features),
-            default=1,
-        )
+            scores[camera["camera_id"]] = {
+                "predicted_violations": camera["predicted_violations"],
+                "risk_score": camera["risk_score"],
+            }
 
-        risk_score = self._risk_score(predicted, worst_day)
-
-        logger.info(
-            "Predicted violations tomorrow: %.1f -> risk score %s/100",
-            predicted,
-            risk_score,
-        )
-
-        return {
-            "predicted_violations": round(predicted, 1),
-            "risk_score": risk_score,
-        }
+        return scores
 
     def details(
         self,
@@ -202,33 +237,45 @@ class RiskService:
         """
         Everything the compliance report shows about the model:
         whether it is available, how much history it has, the
-        forecast for tomorrow, the latest day's inputs, the relative
-        feature importances and the in-sample fit over the history
-        (each day's actual violations against what the model
-        predicts from the previous logged day).
+        relative feature importances, and per camera the forecast
+        for tomorrow, the latest day's inputs and the in-sample fit
+        over that camera's history (each day's actual violations
+        against what the model predicts from the previous logged
+        day).
 
         Always returns a dict; "available" is False until enough
-        history exists to train.
+        history exists to train. "cameras" lists every camera with
+        history, sorted by camera_id, each flagged "available" only
+        once it has CAMERA_MIN_DAYS logged days. "top_camera" is the
+        available camera with the highest risk score, or None.
+
+        Cameras come from the detection history, not from
+        settings.camera_ids: a configured camera with no detections
+        yet has nothing to forecast and does not appear.
         """
 
         features = self._features()
-        training = [f for f in features if "next_viol" in f]
+        training = self._training_rows(features)
 
         details: dict = {
             "available": False,
             "min_days": min_days,
-            "history_days": len(features),
-            "training_days": len(training),
+            "camera_min_days": CAMERA_MIN_DAYS,
+            "history_days": self._distinct_days(
+                [row for series in features.values() for row in series]
+            ),
+            "training_days": self._distinct_days(training),
+            "training_rows": len(training),
             "feature_names": list(FEATURE_NAMES),
             "feature_labels": dict(FEATURE_LABELS),
             "trained_at": None,
             "feature_importances": None,
-            "latest": None,
-            "predicted_violations": None,
-            "risk_score": None,
-            "worst_day": None,
-            "backtest": [],
             "mean_absolute_error": None,
+            "cameras": [
+                self._pending_camera(camera_id, series)
+                for camera_id, series in features.items()
+            ],
+            "top_camera": None,
         }
 
         model = self._load_or_train(min_days)
@@ -236,26 +283,20 @@ class RiskService:
         if model is None or not features:
             return details
 
-        predictions = self._predict(model, features)
-
-        worst = max(features, key=lambda row: row["viol"])
-
-        backtest = [
-            {
-                "day": features[index + 1]["day"],
-                "actual": int(features[index + 1]["viol"]),
-                "predicted": max(predictions[index], 0.0),
-            }
-            for index in range(len(features) - 1)
+        cameras = [
+            self._camera_forecast(model, camera_id, series)
+            for camera_id, series in features.items()
         ]
 
+        ready = [camera for camera in cameras if camera["available"]]
+
         errors = [
-            abs(entry["predicted"] - entry["actual"]) for entry in backtest
+            abs(entry["predicted"] - entry["actual"])
+            for camera in ready
+            for entry in camera["backtest"]
         ]
 
         importances = getattr(model, "feature_importances_", None)
-
-        predicted = max(predictions[-1], 0.0)
 
         details.update(
             {
@@ -273,7 +314,101 @@ class RiskService:
                     if importances is not None
                     else None
                 ),
-                "latest": dict(features[-1]),
+                "mean_absolute_error": (
+                    round(sum(errors) / len(errors), 1) if errors else None
+                ),
+                "cameras": cameras,
+                "top_camera": max(
+                    ready,
+                    key=lambda camera: (
+                        camera["risk_score"],
+                        camera["predicted_violations"],
+                    ),
+                    default=None,
+                ),
+            }
+        )
+
+        return details
+
+    # ==================================================================
+    # Internals
+    # ==================================================================
+
+    def _features(self) -> dict[str, list[dict]]:
+        return build_camera_features(
+            self._repository.daily_stats(),
+            mean_hours=self._repository.daily_mean_hours(),
+        )
+
+    @staticmethod
+    def _training_rows(features: dict[str, list[dict]]) -> list[dict]:
+        return [
+            row
+            for series in features.values()
+            for row in series
+            if "next_viol" in row
+        ]
+
+    @staticmethod
+    def _distinct_days(rows: list[dict]) -> int:
+        return len({row["day"] for row in rows})
+
+    def _load_or_train(
+        self,
+        min_days: int,
+    ) -> GradientBoostingRegressor | None:
+        if self._model_path.exists():
+            payload = joblib.load(self._model_path)
+
+            if (
+                isinstance(payload, dict)
+                and payload.get("version") == MODEL_VERSION
+            ):
+                return payload["model"]
+
+            logger.info(
+                "Saved risk model at %s predates the per-camera format; "
+                "retraining.",
+                self._model_path,
+            )
+
+        return self.train(min_days)
+
+    def _camera_forecast(
+        self,
+        model: GradientBoostingRegressor,
+        camera_id: str,
+        series: list[dict],
+    ) -> dict:
+        forecast = self._pending_camera(camera_id, series)
+
+        if len(series) < CAMERA_MIN_DAYS:
+            return forecast
+
+        predictions = self._predict(model, series)
+
+        worst = max(series, key=lambda row: row["viol"])
+
+        backtest = [
+            {
+                "day": series[index + 1]["day"],
+                "actual": int(series[index + 1]["viol"]),
+                "predicted": max(predictions[index], 0.0),
+            }
+            for index in range(len(series) - 1)
+        ]
+
+        errors = [
+            abs(entry["predicted"] - entry["actual"]) for entry in backtest
+        ]
+
+        predicted = max(predictions[-1], 0.0)
+
+        forecast.update(
+            {
+                "available": True,
+                "latest": dict(series[-1]),
                 "predicted_violations": round(predicted, 1),
                 "risk_score": self._risk_score(predicted, worst["viol"]),
                 "worst_day": {
@@ -287,26 +422,22 @@ class RiskService:
             }
         )
 
-        return details
+        return forecast
 
-    # ==================================================================
-    # Internals
-    # ==================================================================
-
-    def _features(self) -> list[dict]:
-        return build_daily_features(
-            self._repository.daily_stats(),
-            mean_hours=self._repository.daily_mean_hours(),
-        )
-
-    def _load_or_train(
-        self,
-        min_days: int,
-    ) -> GradientBoostingRegressor | None:
-        if self._model_path.exists():
-            return joblib.load(self._model_path)
-
-        return self.train(min_days)
+    @staticmethod
+    def _pending_camera(camera_id: str, series: list[dict]) -> dict:
+        return {
+            "camera_id": camera_id,
+            "history_days": len(series),
+            "last_day": series[-1]["day"] if series else None,
+            "available": False,
+            "latest": None,
+            "predicted_violations": None,
+            "risk_score": None,
+            "worst_day": None,
+            "backtest": [],
+            "mean_absolute_error": None,
+        }
 
     @staticmethod
     def _predict(

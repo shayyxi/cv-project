@@ -7,8 +7,9 @@ Usage:
     python -m scripts.analytics repeat [--days N] [--min N]
     python -m scripts.analytics heatmap --camera ID [--days N] [--json]
         [--image PATH]
-    python -m scripts.analytics report [--days N] [--webhook] [--email]
-    python -m scripts.analytics risk [--train] [--min-days N]
+    python -m scripts.analytics report [--days N] [--camera ID] [--webhook]
+        [--email]
+    python -m scripts.analytics risk [--train] [--min-days N] [--camera ID]
     python -m scripts.analytics export-crops [--days N] [--limit N] [--all]
 """
 
@@ -24,6 +25,7 @@ from app.analytics import (
     ScoringService,
     TrendsService,
 )
+from app.analytics.risk_service import CAMERA_MIN_DAYS
 from app.delivery import ReportDeliveryService
 from app.storage.database import SessionLocal
 from app.utils.logging import configure_logging
@@ -145,19 +147,27 @@ def cmd_report(args, repository: AnalyticsRepository) -> None:
         heatmap_service=HeatmapService(repository),
     )
 
-    report_path = service.generate_report(days=args.days)
+    if args.camera:
+        report_paths = [
+            service.generate_report(days=args.days, camera_id=args.camera)
+        ]
+    else:
+        # Site-wide report first, then one per camera.
+        report_paths = service.generate_reports(days=args.days)
 
-    print(f"Report written to {report_path}")
+    for report_path in report_paths:
+        print(f"Report written to {report_path}")
 
     delivery = ReportDeliveryService()
 
     if args.webhook:
-        status = delivery.deliver_webhook(report_path)
-        print(f"Webhook delivery: HTTP {status}")
+        for report_path in report_paths:
+            status = delivery.deliver_webhook(report_path)
+            print(f"Webhook delivery of {report_path.name}: HTTP {status}")
 
     if args.email:
-        delivery.deliver_email(report_path)
-        print("Emailed.")
+        delivery.deliver_email(report_paths)
+        print(f"Emailed {len(report_paths)} file(s).")
 
 
 def cmd_risk(args, repository: AnalyticsRepository) -> None:
@@ -184,11 +194,35 @@ def cmd_risk(args, repository: AnalyticsRepository) -> None:
         )
         return
 
-    print(
-        f"Predicted violations tomorrow: "
-        f"{result['predicted_violations']} "
-        f"-> daily risk score {result['risk_score']}/100"
-    )
+    if args.camera:
+        result = {
+            camera_id: scores
+            for camera_id, scores in result.items()
+            if camera_id == args.camera
+        }
+
+        if not result:
+            print(
+                f"No forecast for camera {args.camera} yet: it needs "
+                f"{CAMERA_MIN_DAYS} logged days, or has no detections."
+            )
+            return
+
+    if not result:
+        print(
+            f"Model trained, but no camera has the {CAMERA_MIN_DAYS} "
+            "logged days needed for a forecast yet."
+        )
+        return
+
+    print(f"{'camera':<10} {'predicted':>10} {'risk':>8}")
+
+    for camera_id, scores in result.items():
+        print(
+            f"{camera_id:<10} "
+            f"{scores['predicted_violations']:>10} "
+            f"{scores['risk_score']:>8}"
+        )
 
 
 def cmd_export_crops(args, repository: AnalyticsRepository) -> None:
@@ -238,10 +272,16 @@ def main() -> None:
     report.add_argument("--days", type=int, default=7)
     report.add_argument("--webhook", action="store_true")
     report.add_argument("--email", action="store_true")
+    report.add_argument(
+        "--camera",
+        default=None,
+        help="Only build this camera's report (default: site-wide + all).",
+    )
 
     risk = subparsers.add_parser("risk", help="Predictive risk score")
     risk.add_argument("--train", action="store_true")
     risk.add_argument("--min-days", type=int, default=14)
+    risk.add_argument("--camera", default=None)
 
     export_crops = subparsers.add_parser(
         "export-crops", help="Export violation crops for labelling"
