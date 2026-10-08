@@ -1,5 +1,6 @@
 import calendar
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -27,10 +28,12 @@ from app.analytics.analytics_repository import AnalyticsRepository
 from app.analytics.heatmap_service import HeatmapService
 from app.analytics.report_analysis import (
     MIN_DAYS_FOR_WEEKDAY_PATTERN,
+    RISK_CAMERA_MIN_DAYS,
     RISK_MODEL_MIN_DAYS,
     analyze,
+    violations_label,
 )
-from app.analytics.report_charts import build_charts
+from app.analytics.report_charts import MAX_RISK_PANELS, build_charts
 from app.analytics.risk_service import RiskService
 from app.analytics.scoring_service import ScoringService, weighted_score
 from app.analytics.trends_service import TrendsService
@@ -54,6 +57,72 @@ BAD = colors.HexColor("#d03b3b")
 HEATMAP_MAX_PIXELS = 1400
 
 
+@dataclass(frozen=True)
+class _ReportInputs:
+    """Everything one run reads from the database, gathered once."""
+
+    window_start: date
+    prior_start: date
+    history_start: date
+    rows: list[dict]
+    today_score: dict | None
+    repeat_flags: list[dict]
+    risk: dict | None
+
+
+def slice_today_score(
+    today_score: dict | None,
+    camera_id: str,
+) -> dict | None:
+    """
+    ScoringService.overall_score() reduced to one camera, or None
+    when that camera has no score for the day.
+    """
+
+    if not today_score:
+        return None
+
+    for entry in today_score.get("cameras", []):
+        if str(entry["camera_id"]) == camera_id:
+            return {
+                "day": entry["day"],
+                "workers": entry["workers"],
+                "score": entry["score"],
+                "cameras": [entry],
+            }
+
+    return None
+
+
+def slice_risk(risk: dict | None, camera_id: str) -> dict | None:
+    """
+    RiskService.details() reduced to one camera: the model-level
+    fields stay, the camera list holds only that camera, and the
+    headline figures (top camera, fit error) are that camera's own.
+    """
+
+    if risk is None:
+        return None
+
+    entry = next(
+        (
+            camera
+            for camera in risk.get("cameras") or []
+            if str(camera["camera_id"]) == camera_id
+        ),
+        None,
+    )
+
+    return {
+        **risk,
+        "cameras": [entry] if entry else [],
+        "top_camera": entry if entry and entry.get("available") else None,
+        "mean_absolute_error": (
+            entry.get("mean_absolute_error") if entry else None
+        ),
+    }
+
+
 class ReportService:
     """
     PPE compliance report over a rolling window, written as PDF:
@@ -75,12 +144,22 @@ class ReportService:
         risk_service: RiskService | None = None,
         heatmap_service: HeatmapService | None = None,
         output_dir: Path | None = None,
+        camera_ids: list[str] | None = None,
     ) -> None:
         self._repository = repository
         self._scoring_service = scoring_service
         self._trends_service = trends_service
         self._risk_service = risk_service
         self._heatmap_service = heatmap_service
+
+        # Cameras that always get a per-camera report, even without
+        # detections in the window (default: the configured cameras).
+        self._camera_ids = [
+            str(camera_id)
+            for camera_id in (
+                camera_ids if camera_ids is not None else settings.camera_ids
+            )
+        ]
 
         config = load_analytics_config()
 
@@ -103,9 +182,83 @@ class ReportService:
         self,
         days: int = 7,
         today: date | None = None,
+        camera_id: str | None = None,
     ) -> Path:
+        """
+        Write one PDF: the site-wide report, or, with camera_id, a
+        report over that camera's data only.
+        """
+
         today = today or date.today()
 
+        path, _ = self._build_report(
+            days=days,
+            today=today,
+            inputs=self._inputs(days, today),
+            camera_id=camera_id,
+        )
+
+        return path
+
+    def generate_reports(
+        self,
+        days: int = 7,
+        today: date | None = None,
+    ) -> list[Path]:
+        """
+        Write the site-wide report plus one report per camera, each
+        built from that camera's data alone. The expensive inputs
+        (rows, scores, flags, forecast, heatmaps) are gathered once
+        and sliced per camera.
+
+        Cameras are the configured ones plus any camera present in
+        the history window, so a configured camera without detections
+        still gets its (empty) report. A per-camera build that fails
+        is logged and skipped; the site-wide report always comes
+        first and its failure propagates.
+
+        Returns the paths, site-wide first.
+        """
+
+        today = today or date.today()
+
+        inputs = self._inputs(days, today)
+
+        site_path, site_heatmaps = self._build_report(
+            days=days,
+            today=today,
+            inputs=inputs,
+            camera_id=None,
+        )
+
+        paths = [site_path]
+
+        cameras = sorted(
+            set(self._camera_ids)
+            | {str(row["camera_id"]) for row in inputs.rows}
+        )
+
+        for camera_id in cameras:
+            try:
+                path, _ = self._build_report(
+                    days=days,
+                    today=today,
+                    inputs=inputs,
+                    camera_id=camera_id,
+                    heatmaps=site_heatmaps,
+                )
+            except Exception:
+                logger.exception(
+                    "Per-camera report failed for camera_id=%s",
+                    camera_id,
+                )
+                continue
+
+            paths.append(path)
+
+        return paths
+
+    def _inputs(self, days: int, today: date) -> _ReportInputs:
         window_start = today - timedelta(days=days)
         prior_start = today - timedelta(days=2 * days)
         history_start = min(
@@ -113,31 +266,87 @@ class ReportService:
             today - timedelta(days=self._trend_window_days),
         )
 
-        rows = self._repository.daily_stats(since=history_start)
-
-        today_score = self._scoring_service.overall_score(day=today)
-
-        analysis = analyze(
-            rows=rows,
+        return _ReportInputs(
             window_start=window_start,
             prior_start=prior_start,
             history_start=history_start,
+            rows=self._repository.daily_stats(since=history_start),
+            today_score=self._scoring_service.overall_score(day=today),
+            repeat_flags=self._repeat_flags(days),
+            risk=self._risk_forecast(),
+        )
+
+    def _build_report(
+        self,
+        days: int,
+        today: date,
+        inputs: _ReportInputs,
+        camera_id: str | None,
+        heatmaps: list[tuple[str, Path]] | None = None,
+    ) -> tuple[Path, list[tuple[str, Path]]]:
+        """
+        Build one PDF from the shared inputs. With camera_id every
+        input is reduced to that camera first, so nothing from any
+        other camera reaches the page.
+
+        heatmaps: already-rendered (camera_id, path) pairs to reuse;
+        rendered here when None. Returns the PDF path and the
+        heatmaps it used, so a site run can hand them to the
+        per-camera runs.
+        """
+
+        if camera_id is None:
+            rows = inputs.rows
+            today_score = inputs.today_score
+            repeat_flags = inputs.repeat_flags
+            risk = inputs.risk
+        else:
+            rows = [
+                row
+                for row in inputs.rows
+                if str(row["camera_id"]) == camera_id
+            ]
+            today_score = slice_today_score(inputs.today_score, camera_id)
+            repeat_flags = [
+                flag
+                for flag in inputs.repeat_flags
+                if str(flag["camera_id"]) == camera_id
+            ]
+            risk = slice_risk(inputs.risk, camera_id)
+
+        analysis = analyze(
+            rows=rows,
+            window_start=inputs.window_start,
+            prior_start=inputs.prior_start,
+            history_start=inputs.history_start,
             today=today,
             days=days,
             severity=self._severity,
-            repeat_flags=self._repeat_flags(days),
+            repeat_flags=repeat_flags,
             repeat_threshold=self._repeat_threshold,
-            risk=self._risk_forecast(),
+            risk=risk,
             today_score=today_score,
         )
 
-        heatmaps = self._heatmaps(analysis["cameras"], days)
+        if heatmaps is None:
+            heatmaps = self._heatmaps(analysis["cameras"], days)
+
+        if camera_id is not None:
+            heatmaps = [
+                (heatmap_camera, path)
+                for heatmap_camera, path in heatmaps
+                if str(heatmap_camera) == camera_id
+            ]
 
         charts = build_charts(analysis)
 
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
-        output_path = self._output_dir / f"report_{today.isoformat()}.pdf"
+        suffix = f"_camera_{camera_id}" if camera_id is not None else ""
+
+        output_path = (
+            self._output_dir / f"report_{today.isoformat()}{suffix}.pdf"
+        )
 
         _PdfBuilder(
             output_path=output_path,
@@ -145,11 +354,12 @@ class ReportService:
             charts=charts,
             heatmaps=heatmaps,
             severity=self._severity,
+            camera_id=camera_id,
         ).build()
 
         logger.info("Report -> %s", output_path)
 
-        return output_path
+        return output_path, heatmaps
 
     # ==================================================================
     # Optional inputs: a failure here must never block the report.
@@ -333,12 +543,19 @@ class _PdfBuilder:
         charts: dict[str, bytes],
         heatmaps: list[tuple[str, Path]],
         severity: dict[str, float],
+        camera_id: str | None = None,
     ) -> None:
         self._analysis = analysis
         self._charts = charts
         self._heatmaps = heatmaps
         self._severity = severity
+        self._camera_id = camera_id
         self._styles = _styles()
+
+        self._title = "PPE Compliance Report"
+
+        if camera_id is not None:
+            self._title += f" - camera {camera_id}"
 
         self._doc = SimpleDocTemplate(
             str(output_path),
@@ -347,14 +564,14 @@ class _PdfBuilder:
             rightMargin=2 * cm,
             topMargin=1.8 * cm,
             bottomMargin=2.0 * cm,
-            title="PPE Compliance Report",
+            title=self._title,
             author="AI vision pipeline",
         )
 
         self._width = self._doc.width
 
         self._footer_text = (
-            "PPE Compliance Report  |  "
+            f"{self._title}  |  "
             f"{analysis['window_start'].isoformat()} to "
             f"{analysis['today'].isoformat()}"
         )
@@ -497,14 +714,17 @@ class _PdfBuilder:
     def _header(self) -> list:
         a = self._analysis
 
-        camera_count = len(a["cameras"])
-        camera_text = (
-            f"{camera_count} camera{'s' if camera_count != 1 else ''} "
-            "with detections"
-        )
+        if self._camera_id is not None:
+            camera_text = f"camera {self._camera_id} only"
+        else:
+            camera_count = len(a["cameras"])
+            camera_text = (
+                f"{camera_count} camera{'s' if camera_count != 1 else ''} "
+                "with detections"
+            )
 
         return [
-            self._p("PPE Compliance Report", "title"),
+            self._p(self._title, "title"),
             self._p(
                 f"{a['window_start'].isoformat()} to "
                 f"{a['today'].isoformat()} ({a['days']} days) "
@@ -520,6 +740,7 @@ class _PdfBuilder:
         current = a["current"]
         today_score = a["today_score"]
         risk = a["risk"] if a["risk_available"] else None
+        top_camera = (risk or {}).get("top_camera")
 
         violations_change = a["violations_change_pct"]
         score_change = a["score_change"]
@@ -586,13 +807,21 @@ class _PdfBuilder:
             ),
             (
                 "Risk tomorrow",
-                f"{risk['risk_score']:.0f}" if risk else "n/a",
+                f"{top_camera['risk_score']:.0f}" if top_camera else "n/a",
                 (
-                    f"~{risk['predicted_violations']:.0f} violations"
-                    if risk
+                    f"camera {top_camera['camera_id']}, "
+                    f"~{violations_label(top_camera['predicted_violations'])}"
+                    if top_camera
                     else (
-                        f"needs {(a['risk'] or {}).get('min_days', RISK_MODEL_MIN_DAYS)}d "
-                        "history"
+                        f"no camera has "
+                        f"{risk.get('camera_min_days', RISK_CAMERA_MIN_DAYS)}d "
+                        "yet"
+                        if risk
+                        else (
+                            f"needs "
+                            f"{(a['risk'] or {}).get('min_days', RISK_MODEL_MIN_DAYS)}d "
+                            "history"
+                        )
                     )
                 ),
                 INK_SECONDARY,
@@ -711,12 +940,23 @@ class _PdfBuilder:
         risk = a["risk"] or {}
         heading = self._p("Risk forecast", "h2")
 
+        camera_min_days = risk.get("camera_min_days", RISK_CAMERA_MIN_DAYS)
+
         description = self._p(
-            "The forecast is a gradient-boosted regression that predicts "
-            "tomorrow's violation count from today's workers seen, "
-            "violations, violations per worker, day of week, mean capture "
-            "hour and the trailing 7-day rate. The risk score scales that "
-            "prediction to 100 at the worst day on record.",
+            "The forecast is a gradient-boosted regression, trained on "
+            "every camera's history, that predicts each camera's violation "
+            "count tomorrow from that camera's latest logged day: workers "
+            "seen, violations, violations per worker, day of week, mean "
+            "capture hour and the trailing 7-day rate. The risk score "
+            "scales that prediction to 100 at the camera's own worst day on "
+            "record (or one violation if it has none). A camera needs at "
+            f"least {camera_min_days} logged days before it gets a forecast."
+            + (
+                f" This report covers camera {self._camera_id} only; the "
+                "model itself is trained on every camera's history."
+                if self._camera_id is not None
+                else ""
+            ),
             "caption",
         )
 
@@ -743,64 +983,163 @@ class _PdfBuilder:
             return [KeepTogether([heading, self._p(text), description])]
 
         tomorrow = a["today"] + timedelta(days=1)
-        worst = risk.get("worst_day")
+        cameras = risk.get("cameras") or []
+        top = risk.get("top_camera")
 
-        headline = (
-            f"Risk score for {tomorrow.isoformat()}: "
-            f"<b>{risk['risk_score']:.0f}/100</b>. The model expects about "
-            f"{risk['predicted_violations']:.0f} violations"
+        # Forecast cameras by risk, then the pending ones by id.
+        ready = sorted(
+            (c for c in cameras if c.get("available")),
+            key=lambda c: (-c["risk_score"], str(c["camera_id"])),
+        )
+        pending = sorted(
+            (c for c in cameras if not c.get("available")),
+            key=lambda c: str(c["camera_id"]),
         )
 
-        if worst:
-            headline += (
-                f"; the worst day on record is {worst['violations']} on "
-                f"{worst['day'].isoformat()}"
+        if top:
+            worst = top.get("worst_day")
+
+            headline = (
+                f"Highest risk for {tomorrow.isoformat()}: <b>camera "
+                f"{top['camera_id']} at {top['risk_score']:.0f}/100</b>, "
+                f"with about {violations_label(top['predicted_violations'])} "
+                "expected"
             )
 
-        lead = [heading, self._p(headline + ".")]
+            if worst:
+                headline += (
+                    f"; its worst day on record is {worst['violations']} "
+                    f"on {worst['day'].isoformat()}"
+                )
 
-        if "risk" in self._charts:
-            lead += [
-                self._figure(self._charts["risk"]),
-                self._p(
-                    "Grey is what was logged each day; blue is what the "
-                    "model predicts for that day from the previous logged "
-                    "day, with tomorrow's forecast at the end. This is an "
-                    "in-sample fit (the model was trained on these days), "
-                    "so it shows what the model has learned rather than "
-                    "how well it will generalise.",
-                    "caption",
-                ),
-            ]
+            headline += "."
+        elif self._camera_id is not None and cameras:
+            headline = (
+                f"Camera {self._camera_id} has {cameras[0]['history_days']} "
+                f"of the {camera_min_days} logged days needed for a "
+                f"forecast, so there is no forecast for "
+                f"{tomorrow.isoformat()} yet."
+            )
+        elif self._camera_id is not None:
+            headline = (
+                f"Camera {self._camera_id} has no logged history yet, so "
+                f"there is no forecast for {tomorrow.isoformat()}."
+            )
+        else:
+            headline = (
+                "The model is trained, but no camera has the "
+                f"{camera_min_days} logged days needed for a forecast, so "
+                f"every forecast for {tomorrow.isoformat()} is still "
+                "pending."
+            )
+
+        lead = [heading, self._p(headline)]
+
+        if cameras:
+            lead.append(
+                self._table(
+                    [
+                        "Camera",
+                        "Logged days",
+                        "Last logged",
+                        "Expected violations",
+                        "Risk score",
+                        "Worst day on record",
+                        "Fit error",
+                    ],
+                    [
+                        self._risk_row(camera, camera_min_days)
+                        for camera in ready + pending
+                    ],
+                )
+            )
+
+            note = (
+                "Expected violations is the forecast for tomorrow; the "
+                "risk score scales it to 100 at that camera's worst day on "
+                "record. Fit error is the camera's in-sample mean absolute "
+                "error in violations per day."
+            )
+
+            if pending:
+                note += (
+                    f" Cameras need at least {camera_min_days} logged days "
+                    "before they get a forecast."
+                )
+
+            lead.append(self._p(note, "caption"))
 
         elements: list = [KeepTogether(lead)]
 
-        latest = risk.get("latest")
-        labels = risk.get("feature_labels") or {}
+        if "risk" in self._charts:
+            caption = (
+                "One panel per camera, highest risk first. Grey is what "
+                "was logged each day; blue is what the model predicts for "
+                "that day from the previous logged day, with tomorrow's "
+                "forecast at the end. This is an in-sample fit (the model "
+                "was trained on these days), so it shows what the model "
+                "has learned rather than how well it will generalise."
+            )
 
-        if latest:
-            names = [
-                name
-                for name in (risk.get("feature_names") or latest)
-                if name in latest and name != "day"
-            ]
-
-            rows = [
-                [labels.get(name, name), self._fmt_feature(name, latest[name])]
-                for name in names
-            ]
+            if len(ready) > MAX_RISK_PANELS:
+                caption += (
+                    f" Only the {MAX_RISK_PANELS} highest-risk cameras are "
+                    "charted; the table above covers every camera."
+                )
 
             elements.append(
                 KeepTogether(
                     [
-                        self._p("What the model saw today", "h3"),
+                        self._figure(self._charts["risk"]),
+                        self._p(caption, "caption"),
+                    ]
+                )
+            )
+
+        seen = [c for c in ready if c.get("latest")]
+        labels = risk.get("feature_labels") or {}
+
+        if seen:
+            names = [
+                name
+                for name in (
+                    risk.get("feature_names")
+                    or [
+                        key
+                        for key in seen[0]["latest"]
+                        if key not in ("day", "camera_id", "next_viol")
+                    ]
+                )
+                if all(name in c["latest"] for c in seen)
+            ]
+
+            rows = [
+                ["Latest logged day"]
+                + [c["latest"]["day"].isoformat() for c in seen]
+            ]
+
+            rows += [
+                [labels.get(name, name)]
+                + [self._fmt_feature(name, c["latest"][name]) for c in seen]
+                for name in names
+            ]
+
+            first_width = 5 * cm
+
+            elements.append(
+                KeepTogether(
+                    [
+                        self._p(
+                            "What the model saw on each camera's latest day",
+                            "h3",
+                        ),
                         self._table(
-                            [
-                                f"Model input ({latest['day'].isoformat()})",
-                                "Value",
-                            ],
+                            ["Model input"]
+                            + [f"camera {c['camera_id']}" for c in seen],
                             rows,
-                            col_widths=[7 * cm, 3 * cm],
+                            col_widths=[first_width]
+                            + [(self._width - first_width) / len(seen)]
+                            * len(seen),
                         ),
                     ]
                 )
@@ -819,7 +1158,12 @@ class _PdfBuilder:
         notes = []
 
         if risk.get("training_days"):
-            notes.append(f"trained on {risk['training_days']} days")
+            note = f"trained on {risk['training_days']} days"
+
+            if risk.get("training_rows"):
+                note += f" ({risk['training_rows']} camera-days)"
+
+            notes.append(note)
 
         if risk.get("trained_at"):
             notes.append(f"last trained {risk['trained_at']:%Y-%m-%d %H:%M}")
@@ -843,6 +1187,32 @@ class _PdfBuilder:
         elements.append(description)
 
         return elements
+
+    @staticmethod
+    def _risk_row(camera: dict, camera_min_days: int) -> list[str]:
+        last_day = camera.get("last_day")
+
+        row = [
+            f"camera {camera['camera_id']}",
+            f"{camera['history_days']}",
+            last_day.isoformat() if last_day else "-",
+        ]
+
+        if not camera.get("available"):
+            return row + ["-", "pending", f"needs {camera_min_days} days", "-"]
+
+        worst = camera.get("worst_day")
+
+        return row + [
+            f"{camera['predicted_violations']:.1f}",
+            f"{camera['risk_score']:.0f}/100",
+            (
+                f"{worst['violations']} on {worst['day'].isoformat()}"
+                if worst
+                else "-"
+            ),
+            _fmt_score(camera.get("mean_absolute_error")),
+        ]
 
     @staticmethod
     def _fmt_feature(name: str, value) -> str:
@@ -945,6 +1315,11 @@ class _PdfBuilder:
         heading = self._p("Cameras", "h2")
         elements: list = []
 
+        if self._camera_id is not None:
+            # A single-camera report has nothing to compare; only the
+            # repeated non-compliance flags for this camera remain.
+            return [KeepTogether(self._repeat_flags(level="h2"))]
+
         if "cameras" in self._charts:
             rows = [
                 [
@@ -1002,12 +1377,12 @@ class _PdfBuilder:
 
         return elements
 
-    def _repeat_flags(self) -> list:
+    def _repeat_flags(self, level: str = "h3") -> list:
         a = self._analysis
         flags = a["repeat_flags"]
         threshold = a["repeat_threshold"]
 
-        elements = [self._p("Repeated non-compliance", "h3")]
+        elements = [self._p("Repeated non-compliance", level)]
 
         threshold_text = (
             f"{threshold['min_violations']} or more violations of the same "
@@ -1018,11 +1393,14 @@ class _PdfBuilder:
         )
 
         if not flags:
+            subject = (
+                f"Camera {self._camera_id} did not reach"
+                if self._camera_id is not None
+                else "No camera reached"
+            )
+
             elements.append(
-                self._p(
-                    f"No camera reached the flag threshold "
-                    f"({threshold_text})."
-                )
+                self._p(f"{subject} the flag threshold ({threshold_text}).")
             )
             return elements
 

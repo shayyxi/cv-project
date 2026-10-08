@@ -179,7 +179,34 @@ def test_analyze_compares_periods_and_lists_coverage_gaps() -> None:
     assert analysis["best_day"]["day"] == TODAY
 
 
-def test_findings_call_out_systemic_classes_and_no_prior() -> None:
+def _camera(camera_id, risk_score=None, predicted=None, history_days=21) -> dict:
+    """A RiskService.details() camera entry; pending when no score."""
+
+    return {
+        "camera_id": camera_id,
+        "history_days": history_days,
+        "last_day": TODAY,
+        "available": risk_score is not None,
+        "predicted_violations": predicted,
+        "risk_score": risk_score,
+    }
+
+
+def _risk(*cameras: dict, **extra) -> dict:
+    """A trained RiskService.details() dict over the given cameras."""
+
+    ready = [camera for camera in cameras if camera["available"]]
+
+    return {
+        "available": True,
+        "camera_min_days": 7,
+        "cameras": list(cameras),
+        "top_camera": max(ready, key=lambda c: c["risk_score"], default=None),
+        **extra,
+    }
+
+
+def test_findings_do_not_mention_per_class_rates() -> None:
     rows = [
         _row(TODAY, camera="12990", workers=20, helmet=5, vest=20, boots=20),
         _row(TODAY - timedelta(days=1), camera="12875", workers=5, vest=5, boots=5),
@@ -189,8 +216,8 @@ def test_findings_call_out_systemic_classes_and_no_prior() -> None:
     text = " ".join(findings)
 
     assert "No data exists for the prior 7-day period" in text
-    assert "Missing vest and boots was flagged on virtually every sighting" in text
-    assert "Missing helmet was flagged on 20% of sightings (5 of 25)" in text
+    # Per-class missing rates live in the PPE-class table only.
+    assert "was flagged on" not in text
     assert "Camera 12990 accounted for 82% of all violations" in text
     assert "No worker sighting was fully compliant" in text
     assert "risk forecast is not available" in text
@@ -207,40 +234,69 @@ def test_findings_include_flags_risk_and_weekday_pattern() -> None:
         repeat_flags=[
             {"camera_id": "12990", "class": "helmet", "violations": 9, "window_days": 7}
         ],
-        risk={"predicted_violations": 4.4, "risk_score": 55.0},
+        risk=_risk(_camera("12990", 55.0, 4.4)),
     )
 
     text = " ".join(analysis["findings"])
 
     assert "1 camera/PPE combination hit the repeated non-compliance threshold" in text
     assert "camera 12990 helmet (9x)" in text
-    assert "forecasts about 4 violations tomorrow (risk score 55.0/100" in text
+    assert (
+        "Tomorrow's risk forecast by camera: camera 12990 55/100 (~4 violations)."
+        in text
+    )
     assert "Over the last 21 logged days" in text
     assert analysis["trend"] is not None
 
 
-def test_risk_findings_name_top_features_or_history_count() -> None:
+def test_risk_findings_list_every_camera_highest_first() -> None:
     rows = [_row(TODAY, workers=4, helmet=1)]
 
     available = _analyze(
         rows,
-        risk={
-            "predicted_violations": 4.4,
-            "risk_score": 55.0,
-            "feature_importances": {"crew": 0.5, "rate": 0.3, "viol": 0.2},
-            "feature_labels": {"crew": "workers seen", "rate": "violations per worker"},
-        },
+        risk=_risk(
+            _camera("12990", 55.0, 4.4),
+            _camera("12846", 80.0, 9.6),
+            _camera("12875", history_days=3),
+            feature_importances={"crew": 0.5, "rate": 0.3, "viol": 0.2},
+            feature_labels={"crew": "workers seen", "rate": "violations per worker"},
+        ),
     )
+
+    text = " ".join(available["findings"])
 
     assert available["risk_available"] is True
     assert (
-        "It leans most on workers seen and violations per worker."
-        in " ".join(available["findings"])
+        "camera 12846 80/100 (~10 violations), "
+        "camera 12990 55/100 (~4 violations)."
+    ) in text
+    assert "Camera 12875 (3 of 7 logged days) has no forecast yet." in text
+    assert "It leans most on workers seen and violations per worker." in text
+
+
+def test_risk_finding_when_every_camera_is_pending() -> None:
+    analysis = _analyze(
+        [_row(TODAY, workers=4, helmet=1)],
+        risk=_risk(_camera("12875", history_days=3), _camera("12990", history_days=5)),
     )
 
+    assert analysis["risk_available"] is True
+    assert (
+        "no camera has the 7 logged days needed for a forecast yet: "
+        "camera 12875 has 3 and camera 12990 has 5."
+    ) in " ".join(analysis["findings"])
+
+
+def test_risk_finding_reports_history_count_while_model_pending() -> None:
     pending = _analyze(
-        rows,
-        risk={"available": False, "min_days": 14, "training_days": 3, "risk_score": None},
+        [_row(TODAY, workers=4, helmet=1)],
+        risk={
+            "available": False,
+            "min_days": 14,
+            "training_days": 3,
+            "cameras": [],
+            "top_camera": None,
+        },
     )
 
     assert pending["risk_available"] is False
@@ -254,3 +310,23 @@ def test_findings_for_empty_period() -> None:
 
     assert findings[0].startswith("No worker detections were logged")
     assert any("risk forecast" in finding for finding in findings)
+
+
+def test_risk_finding_for_a_single_pending_camera() -> None:
+    analysis = _analyze(
+        [_row(TODAY, workers=4, helmet=1)],
+        risk=_risk(_camera("12990", history_days=3)),
+    )
+
+    assert (
+        "The risk model is trained, but camera 12990 has 3 of the 7 logged "
+        "days needed for a forecast."
+    ) in " ".join(analysis["findings"])
+
+
+def test_risk_finding_without_any_camera_history() -> None:
+    analysis = _analyze([_row(TODAY, workers=4, helmet=1)], risk=_risk())
+
+    assert "there is no logged history to forecast from yet" in " ".join(
+        analysis["findings"]
+    )
