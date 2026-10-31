@@ -50,6 +50,8 @@ services:
 
     volumes:
       - ./data:/data
+      # A model installed from the retrain-ui page lands here; the
+      # engine re-reads best.pt when it changes, no restart needed.
       - ./app/processing/cv/weights:/app/app/processing/cv/weights:ro
       # Crop regions saved from the retrain-ui page land here; the
       # cropper re-reads the file when it changes, no restart needed.
@@ -57,8 +59,6 @@ services:
 
   # Streamlit page with the Upload / Train buttons (scripts/retrain_ui.py).
   # Not published on a host port: Caddy below is the only way in.
-  # After the Train button installs a new best.pt, run:
-  #   docker compose restart app
   retrain-ui:
     build:
       context: .

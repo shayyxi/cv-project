@@ -1,3 +1,5 @@
+import logging
+import os
 from pathlib import Path
 
 import cv2
@@ -18,7 +20,10 @@ from app.dto import (
 
 )
 from app.processing.cv.vision_engine import VisionEngine
+from app.processing.Image_cropper.image_cropper import CONFIG_PATH as CAMERA_CONFIG_PATH
 from app.utils.smart_crop import smart_crop
+
+logger = logging.getLogger(__name__)
 
 
 class PPEVisionEngine(VisionEngine):
@@ -31,6 +36,14 @@ class PPEVisionEngine(VisionEngine):
 
         self._person_model = None
         self._ppe_model = None
+        self._ppe_weights_mtime: float | None = None
+
+        # Camera id -> PPE classes switched off for it (the
+        # disabled_ppe key of the crop config, saved from the
+        # retraining page); re-read when the file changes.
+        self._disabled_ppe_path = CAMERA_CONFIG_PATH
+        self._disabled_ppe: dict[str, set[str]] = {}
+        self._disabled_ppe_mtime: float | None = None
 
         self._models_loaded = False
 
@@ -57,20 +70,109 @@ class PPEVisionEngine(VisionEngine):
             device=self._device,
         )
 
-        self._ppe_model = YOLO(self._ppe_model_path)
+        self._ppe_model = self._load_ppe_model()
 
-        if self._device == "cuda":
-            self._ppe_model.to("cuda")
-        else:
-            self._ppe_model.to("cpu")
+        self._ppe_weights_mtime = self._ppe_weights_mtime_on_disk()
 
         self._models_loaded = True
+
+    def _load_ppe_model(self):
+        model = YOLO(self._ppe_model_path)
+
+        if self._device == "cuda":
+            model.to("cuda")
+        else:
+            model.to("cpu")
+
+        return model
+
+    def _ppe_weights_mtime_on_disk(self) -> float | None:
+        try:
+            return os.stat(self._ppe_model_path).st_mtime
+        except OSError:
+            return None
+
+    def _reload_ppe_model_if_changed(self) -> None:
+        """
+        Re-read the PPE weights when the file's modification time has
+        changed, so a model installed from the retraining page is used
+        for the next frame without a restart. A file that fails to load
+        keeps the previous model and is not tried again until it changes.
+        """
+
+        mtime = self._ppe_weights_mtime_on_disk()
+
+        if mtime is None or mtime == self._ppe_weights_mtime:
+            return
+
+        try:
+            model = self._load_ppe_model()
+        except Exception:
+            logger.warning(
+                "Could not reload %s - keeping the previous PPE model.",
+                self._ppe_model_path,
+                exc_info=True,
+            )
+            # A model load is expensive: try a broken file once, not on
+            # every frame. The next install changes the mtime again.
+            self._ppe_weights_mtime = mtime
+            return
+
+        self._ppe_model = model
+        self._ppe_weights_mtime = mtime
+
+        logger.info("PPE model reloaded from %s", self._ppe_model_path)
+
+    def _reload_disabled_ppe_if_changed(self) -> None:
+        """
+        Re-read the per-camera switched-off PPE classes when the crop
+        config's modification time has changed, so a class turned off
+        on the retraining page is ignored from the next frame without
+        a restart. A missing file switches nothing off; a file that
+        fails to read keeps the previous table.
+        """
+
+        try:
+            mtime = os.stat(self._disabled_ppe_path).st_mtime
+        except OSError:
+            mtime = None
+
+        if mtime == self._disabled_ppe_mtime:
+            return
+
+        disabled: dict[str, set[str]] = {}
+
+        if mtime is not None:
+            try:
+                content = yaml.safe_load(
+                    Path(self._disabled_ppe_path).read_text(encoding="utf-8")
+                ) or {}
+                disabled = {
+                    str(camera): {str(name).lower() for name in names or []}
+                    for camera, names in (content.get("disabled_ppe") or {}).items()
+                }
+            except (OSError, yaml.YAMLError):
+                logger.warning(
+                    "Could not read %s - keeping the previous PPE class switches.",
+                    self._disabled_ppe_path,
+                    exc_info=True,
+                )
+                return
+
+        self._disabled_ppe = disabled
+        self._disabled_ppe_mtime = mtime
+
+        logger.info("PPE class switches reloaded: %s", disabled or "none")
 
     def process_image(
         self,
         image_bytes: bytes,
         camera_id: str,
     ) -> VisionResultDTO:
+
+        # Between frames only, so one frame never mixes two models.
+        self._reload_ppe_model_if_changed()
+        self._reload_disabled_ppe_if_changed()
 
         sahi_settings = self._resolve_sahi_settings(camera_id)
         image = self._decode_image(image_bytes)
@@ -124,28 +226,7 @@ class PPEVisionEngine(VisionEngine):
                     ppe_detections
                 )
 
-            has_helmet = any(
-                d["label"] == self._helmet_class
-                for d in ppe_detections
-            )
-
-            has_vest = any(
-                d["label"] == self._vest_class
-                for d in ppe_detections
-            )
-
-            has_boots = any(
-                d["label"] == self._boots_class
-                for d in ppe_detections
-            )
-
-            compliant = (
-                has_helmet
-                and has_vest
-                and has_boots
-            )
-
-
+            compliance = self._compliance(camera_id, ppe_detections)
 
             detections.append(
                 VisionDetectionDTO(
@@ -164,12 +245,7 @@ class PPEVisionEngine(VisionEngine):
 
                     person_id=person_id,
 
-                    compliance=ComplianceDTO(
-                        helmet=has_helmet,
-                        vest=has_vest,
-                        boots=has_boots,
-                        compliant=compliant,
-                    ),
+                    compliance=compliance,
 
                     ppe=self._build_ppe_detections(
                         ppe_detections,
@@ -183,6 +259,27 @@ class PPEVisionEngine(VisionEngine):
             worker_count=len(persons),
             detections=detections,
         )
+
+    def _compliance(self, camera_id: str, ppe_detections) -> ComplianceDTO:
+        """
+        One person's verdict from the PPE boxes left on them. A class
+        switched off for this camera counts as present, so it never
+        makes the person non-compliant.
+        """
+
+        labels = {d["label"] for d in ppe_detections}
+        disabled = self._disabled_ppe.get(str(camera_id), set())
+
+        has = {
+            slot: slot in disabled or label in labels
+            for slot, label in (
+                ("helmet", self._helmet_class),
+                ("vest", self._vest_class),
+                ("boots", self._boots_class),
+            )
+        }
+
+        return ComplianceDTO(**has, compliant=all(has.values()))
 
 
 

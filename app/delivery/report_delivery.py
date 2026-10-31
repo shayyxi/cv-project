@@ -1,5 +1,6 @@
 import logging
 import smtplib
+from collections.abc import Iterable
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -12,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 class ReportDeliveryService:
     """
-    Delivers a generated report file to a webhook or by email.
+    Delivers generated report files to a webhook (one POST per file)
+    or by email (one message with every file attached).
     """
 
     def deliver_webhook(
@@ -62,12 +64,14 @@ class ReportDeliveryService:
 
     def deliver_email(
         self,
-        report_path: str | Path,
+        report_paths: str | Path | Iterable[str | Path],
         subject: str = "PPE compliance report",
     ) -> None:
         """
-        Email the report as an attachment via the configured
-        SMTP server (SMTP_HOST/PORT/USER/PASSWORD/TO in .env).
+        Email the report(s) as attachments of one message via the
+        configured SMTP server (SMTP_HOST/PORT/USER/PASSWORD/TO in
+        .env). Accepts a single path or any iterable of paths, e.g.
+        the site-wide report followed by the per-camera reports.
         """
 
         if not settings.smtp_host:
@@ -76,22 +80,34 @@ class ReportDeliveryService:
                 "SMTP_PASSWORD and SMTP_TO in .env"
             )
 
-        report_path = Path(report_path)
+        if isinstance(report_paths, (str, Path)):
+            report_paths = [report_paths]
+
+        paths = [Path(path) for path in report_paths]
+
+        if not paths:
+            raise ValueError("No report files to email")
 
         message = EmailMessage()
         message["From"] = settings.smtp_user
         message["To"] = settings.smtp_to
         message["Subject"] = subject
         message.set_content(
-            "Attached: automated PPE compliance report."
+            "Attached: automated PPE compliance report"
+            + (
+                "s (site-wide first, then one per camera)."
+                if len(paths) > 1
+                else "."
+            )
         )
 
-        message.add_attachment(
-            report_path.read_bytes(),
-            maintype="application",
-            subtype="pdf",
-            filename=report_path.name,
-        )
+        for path in paths:
+            message.add_attachment(
+                path.read_bytes(),
+                maintype="application",
+                subtype="pdf",
+                filename=path.name,
+            )
 
         with smtplib.SMTP(
             settings.smtp_host,
@@ -105,6 +121,7 @@ class ReportDeliveryService:
             server.send_message(message)
 
         logger.info(
-            "Report emailed -> %s",
+            "%d report file(s) emailed -> %s",
+            len(paths),
             settings.smtp_to,
         )

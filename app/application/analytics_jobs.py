@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
 from app.analytics.heatmap_service import HeatmapService
 from app.analytics.labeling_service import LabelingService
@@ -16,7 +16,8 @@ class AnalyticsJobs:
     """
     Daily Phase 2 jobs run from the main loop:
 
-        - compliance report (with optional webhook/email delivery)
+        - compliance reports, site-wide plus one per camera (with
+          optional webhook/email delivery)
         - predictive risk score attempt
         - violation heatmap per camera
         - label-queue export for retraining
@@ -26,9 +27,16 @@ class AnalyticsJobs:
     job_runs table, so jobs do not run twice on the same day after
     a restart. A failing job is logged and never stops the pipeline
     loop.
+
+    The compliance report (generation and delivery) only runs Monday
+    to Friday when settings.report_weekdays_only is set; on Saturday
+    and Sunday it is skipped while the other jobs still run.
     """
 
     JOB_NAME = "daily_analytics"
+
+    # Monday=0 ... Friday=4 (datetime.weekday()).
+    REPORT_WEEKDAYS = frozenset(range(5))
 
     def __init__(
         self,
@@ -68,12 +76,34 @@ class AnalyticsJobs:
 
         logger.info("Running daily analytics jobs.")
 
-        self._run_job("report", self._report_job)
+        if self.is_report_day(now.date()):
+            self._run_job("report", self._report_job)
+        else:
+            logger.info(
+                "Report generation and delivery skipped on %s (%s): "
+                "reports only go out Monday to Friday.",
+                now.date(),
+                now.strftime("%A"),
+            )
+
         self._run_job("risk", self._risk_job)
         self._run_job("heatmap", self._heatmap_job)
         self._run_job("label-queue", self._labeling_job)
 
         return True
+
+    @classmethod
+    def is_report_day(cls, day: date) -> bool:
+        """
+        True when the report should be generated and delivered on
+        ``day``: Monday to Friday, or every day when weekdays-only
+        reporting is disabled in settings.
+        """
+
+        if not settings.report_weekdays_only:
+            return True
+
+        return day.weekday() in cls.REPORT_WEEKDAYS
 
     def _run_job(self, name, job) -> None:
         try:
@@ -89,15 +119,24 @@ class AnalyticsJobs:
             self._job_run_repository.session.rollback()
 
     def _report_job(self) -> None:
-        report_path = self._report_service.generate_report(
+        report_paths = self._report_service.generate_reports(
             days=settings.report_days,
         )
 
         if settings.report_deliver_webhook:
-            self._delivery_service.deliver_webhook(report_path)
+            # One POST per file; a failed one must not block the rest
+            # of the files or the email.
+            for report_path in report_paths:
+                try:
+                    self._delivery_service.deliver_webhook(report_path)
+                except Exception:
+                    logger.exception(
+                        "Webhook delivery failed for %s",
+                        report_path,
+                    )
 
         if settings.report_deliver_email:
-            self._delivery_service.deliver_email(report_path)
+            self._delivery_service.deliver_email(report_paths)
 
     def _risk_job(self) -> None:
         self._risk_service.score()

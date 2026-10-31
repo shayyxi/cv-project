@@ -214,13 +214,18 @@ CONFIG_PATH = (
 
 class ImageCropper:
     """
-    Crops an image according to a configured polygon for each camera.
+    Crops an image according to the labelled crops configured for each
+    camera (see app.retraining.regions for the yaml).
 
-    The polygon defines the region in the ORIGINAL image where vision
-    inference is allowed to operate.
+    The drawn crops (`person detection`, `safety`, `priority`; `person`
+    and `include` from earlier saves count as `person detection`)
+    define where in the ORIGINAL image vision inference is allowed to
+    operate; with none configured the whole frame is used. Everything
+    outside them is blacked out. The `exclude` entries the page writes
+    describe that outside for the file's readers and are ignored here.
 
-    The returned crop is rectangular, based on the polygon's bounding
-    rectangle, with pixels outside the polygon masked out.
+    The returned crop is rectangular, the bounding rectangle of the
+    drawn crops, with pixels outside them masked out.
 
     Detection coordinates produced inside the crop can subsequently be
     translated back to original-image coordinates.
@@ -280,7 +285,7 @@ class ImageCropper:
         camera_id: str,
     ):
         """
-        Crop the image according to the polygon configured for camera_id.
+        Crop the image according to the crops configured for camera_id.
 
         Returns:
             cropped_image_bytes
@@ -289,7 +294,7 @@ class ImageCropper:
         crop_region contains:
             x_offset
             y_offset
-            polygon
+            polygon (the first include crop, or the whole frame)
         """
 
         image_array = np.frombuffer(
@@ -307,20 +312,28 @@ class ImageCropper:
                 "Could not decode image bytes."
             )
 
-        polygon = self._get_polygon(camera_id)
+        drawn = self._get_crops(camera_id)
 
-        polygon_array = np.array(
-            polygon,
-            dtype=np.int32,
-        )
+        image_height, image_width = image.shape[:2]
 
         # --------------------------------------------------------------
-        # Bounding rectangle around polygon
+        # Bounding rectangle around the drawn crops (the whole frame
+        # when there is none)
         # --------------------------------------------------------------
 
-        x, y, width, height = cv2.boundingRect(
-            polygon_array
-        )
+        if drawn:
+            x, y, width, height = cv2.boundingRect(
+                np.array(
+                    [point for polygon in drawn for point in polygon],
+                    dtype=np.int32,
+                )
+            )
+
+            x, y = max(x, 0), max(y, 0)
+            width = min(width, image_width - x)
+            height = min(height, image_height - y)
+        else:
+            x, y, width, height = 0, 0, image_width, image_height
 
         if width <= 0 or height <= 0:
             raise ValueError(
@@ -337,28 +350,28 @@ class ImageCropper:
         ].copy()
 
         # --------------------------------------------------------------
-        # Translate polygon into crop coordinates
+        # Mask: inside an include crop and outside every exclude crop
         # --------------------------------------------------------------
 
-        crop_polygon = polygon_array.copy()
-
-        crop_polygon[:, 0] -= x
-        crop_polygon[:, 1] -= y
-
-        # --------------------------------------------------------------
-        # Mask everything outside polygon
-        # --------------------------------------------------------------
+        def in_crop_coordinates(polygons):
+            return [
+                (np.array(polygon, dtype=np.int32) - (x, y)).astype(np.int32)
+                for polygon in polygons
+            ]
 
         mask = np.zeros(
             (height, width),
             dtype=np.uint8,
         )
 
-        cv2.fillPoly(
-            mask,
-            [crop_polygon],
-            255,
-        )
+        # One fillPoly call per polygon: a single call with several
+        # polygons fills by the even-odd rule, which would punch a hole
+        # where a safety or priority zone lies inside the person crop.
+        if drawn:
+            for polygon in in_crop_coordinates(drawn):
+                cv2.fillPoly(mask, [polygon], 255)
+        else:
+            mask[:] = 255
 
         crop[mask == 0] = 0
 
@@ -379,6 +392,18 @@ class ImageCropper:
             raise ValueError(
                 "Could not encode cropped image."
             )
+
+        # The outline drawn on the delivered image: the first person
+        # crop (person crops come first), or the whole frame.
+        if drawn:
+            polygon = drawn[0]
+        else:
+            polygon = [
+                (x, y),
+                (x + width - 1, y),
+                (x + width - 1, y + height - 1),
+                (x, y + height - 1),
+            ]
 
         crop_region = {
             "x_offset": x,
@@ -450,13 +475,19 @@ class ImageCropper:
     # Config
     # ==================================================================
 
-    def _get_polygon(
+    def _get_crops(
         self,
         camera_id: str,
-    ):
+    ) -> list[list[tuple[int, int]]]:
         """
-        Return the configured polygon for a camera, from the current
-        contents of the config file.
+        The drawn polygons of a camera, from the current contents of
+        the config file: the person detection, safety and priority
+        crops (`person` and `include` from earlier saves count as
+        person detection), person detection crops first so the outline
+        is one of them. Reads the camera's `crops` list; a camera with
+        only the older single `polygon` key is one person detection
+        crop. Exclude entries, and any polygon with fewer than three
+        points, have no effect here.
         """
 
         self._reload_config_if_changed()
@@ -470,20 +501,34 @@ class ImageCropper:
                 f"No crop region configured for camera_id={camera_id}"
             )
 
-        polygon = camera_config.get("polygon")
+        crops = camera_config.get("crops")
 
-        if not polygon:
-            raise ValueError(
-                f"No polygon configured for camera_id={camera_id}"
-            )
+        if crops is None:
+            polygon = camera_config.get("polygon")
+            crops = [{"label": "person detection", "polygon": polygon}] if polygon else []
 
-        return [
-            (
-                int(point[0]),
-                int(point[1]),
-            )
-            for point in polygon
-        ]
+        persons: list[list[tuple[int, int]]] = []
+        zones: list[list[tuple[int, int]]] = []
+
+        for item in crops or []:
+            item = item or {}
+
+            polygon = [
+                (int(point[0]), int(point[1]))
+                for point in (item.get("polygon") or [])
+            ]
+
+            if len(polygon) < 3:
+                continue
+
+            label = str(item.get("label", "person detection")).strip().lower()
+
+            if label in ("person detection", "person", "include"):
+                persons.append(polygon)
+            elif label in ("safety", "priority"):
+                zones.append(polygon)
+
+        return persons + zones
 
     @staticmethod
     def _load_config(config_path: Path | None = None):

@@ -197,6 +197,60 @@ class RoboflowUploadService:
 
         return summary
 
+    def list_crops(self) -> list[dict]:
+        """
+        Every crop in the queue, by name: {"name", "path", "camera_id",
+        "boxes" (pre-label count), "labels" (category names), "split",
+        "uploaded_at" (None while pending), "duplicate"}. Reads the
+        queue, the COCO file and the manifest; connects to nothing.
+        """
+
+        names = self._crops_on_disk()
+
+        if not names:
+            return []
+
+        uploads = self._load_manifest()["projects"].get(
+            self._config.project_name, {}
+        )
+
+        coco = self._load_coco()
+
+        categories = {
+            category["id"]: category["name"]
+            for category in coco["categories"]
+        }
+
+        crops = []
+
+        for name in names:
+            entry = coco["images"].get(name)
+            annotations = entry["annotations"] if entry else []
+            record = uploads.get(name) or {}
+
+            crops.append(
+                {
+                    "name": name,
+                    "path": self._queue_dir / name,
+                    "camera_id": self.camera_id_for(name),
+                    "boxes": len(annotations),
+                    "labels": sorted(
+                        {
+                            categories.get(
+                                annotation["category_id"],
+                                str(annotation["category_id"]),
+                            )
+                            for annotation in annotations
+                        }
+                    ),
+                    "split": self.split_for(name),
+                    "uploaded_at": record.get("uploaded_at"),
+                    "duplicate": bool(record.get("duplicate")),
+                }
+            )
+
+        return crops
+
     def split_for(self, file_name: str) -> str:
         """
         Deterministic train/valid assignment from the file name, so a

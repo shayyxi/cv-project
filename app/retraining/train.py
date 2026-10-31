@@ -4,6 +4,7 @@ as the weights file the vision engine loads.
 """
 
 import logging
+import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -207,7 +208,7 @@ def install_weights(
     """
     Copy best.pt over the engine's PPE weights, keeping a timestamped
     backup of the previous file next to it. Returns (target, backup).
-    The pipeline loads the new weights on its next start.
+    A running pipeline picks the new weights up on its next frame.
     """
 
     best = Path(best)
@@ -232,7 +233,19 @@ def install_weights(
 
         logger.info("Backed up %s -> %s", target, backup)
 
-    shutil.copy2(best, target)
+    # Copy next to the target, then rename over it: the rename is atomic
+    # on the same filesystem, so the running pipeline (which reloads the
+    # file when its mtime changes) never sees a half-written best.pt.
+    # copyfile, not copy2, so the installed file's mtime is the install
+    # time rather than the training time.
+    tmp = target.with_name(target.name + ".tmp")
+
+    try:
+        shutil.copyfile(best, tmp)
+        os.replace(tmp, target)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
     logger.info("Installed %s -> %s", best, target)
 

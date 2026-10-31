@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,11 @@ def test_install_weights_backs_up_the_previous_file(tmp_path) -> None:
     assert backup.suffix == ".pt"
     assert backup.read_bytes() == b"old weights"
 
+    # Nothing left over from the copy-then-rename.
+    assert sorted(p.name for p in target.parent.iterdir()) == sorted(
+        ["best.pt", backup.name]
+    )
+
 
 def test_install_weights_without_a_previous_file(tmp_path) -> None:
     best = tmp_path / "best.pt"
@@ -73,6 +79,28 @@ def test_install_weights_without_a_previous_file(tmp_path) -> None:
 def test_install_weights_needs_a_source_file(tmp_path) -> None:
     with pytest.raises(FileNotFoundError):
         install_weights(tmp_path / "missing.pt", tmp_path / "best.pt")
+
+
+def test_install_weights_leaves_the_old_file_when_the_rename_fails(
+    tmp_path, monkeypatch
+) -> None:
+    best = tmp_path / "best.pt"
+    best.write_bytes(b"new weights")
+
+    target = tmp_path / "weights" / "best.pt"
+    target.parent.mkdir()
+    target.write_bytes(b"old weights")
+
+    def failing_replace(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+
+    with pytest.raises(OSError):
+        install_weights(best, target)
+
+    assert target.read_bytes() == b"old weights"
+    assert not list(target.parent.glob("*.tmp"))
 
 
 def test_training_result_summary_picks_headline_metrics() -> None:

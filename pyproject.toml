@@ -20,6 +20,7 @@ dependencies = [
     "torch",
     "ultralytics",
     "sahi",
+    "shapely",
     "PyYAML",
     "reportlab",
     "matplotlib",

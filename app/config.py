@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # after report_hour (local time).
     report_hour: int = Field(default=18)
     report_days: int = Field(default=7)
+    # Generate and deliver the report Monday to Friday only; on
+    # Saturday and Sunday the report job is skipped while the other
+    # daily jobs still run. Set to false to report every day.
+    report_weekdays_only: bool = Field(default=True)
     report_deliver_webhook: bool = Field(default=False)
     report_deliver_email: bool = Field(default=False)
 
@@ -39,6 +43,10 @@ class Settings(BaseSettings):
 
     wordpress_api_endpoint: str
     wordpress_api_key: str
+
+    # Optional report webhook (REPORT_DELIVER_WEBHOOK): each PDF is
+    # POSTed here with wordpress_api_key as X-API-Key.
+    wordpress_webhook_url: str = Field(default="")
 
     wordpress_requests_per_minute: int = 50
     wordpress_timeout_seconds: int = 30

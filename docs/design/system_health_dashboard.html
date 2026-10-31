@@ -1,0 +1,1100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Vision System Health</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: sticky slim top bar, then stacked sections. Summary tiles in a
+   4-column grid that drops to 2 and 1; every table sits in its own
+   horizontal-scroll wrapper so the page never scrolls sideways.
+   Dark only: the platform keeps the Fingo colours (reviewer decision,
+   October 2026). The same tokens as the retraining page and the Site
+   Safety Review. */
+:root {
+  --bg: #3b3b3b;
+  --surface: #1e1e1e;
+  --surface-2: #262626;
+  --fg: #ffffff;
+  --fg-muted: #b3b3b3;
+  --line: rgba(255, 255, 255, 0.14);
+  --accent: #8ac646;
+  --accent-strong: #7eb145;
+  --accent-tint: rgba(138, 198, 70, 0.14);
+  --series-1: #8ac646;
+  --series-2: #b3b3b3;
+  --ok-ink: #8ac646;
+  --warn: #f2b134;
+  --warn-ink: #f2b134;
+  --warn-tint: rgba(242, 177, 52, 0.16);
+  --crit: #ef6b64;
+  --crit-ink: #ef6b64;
+  --crit-tint: rgba(239, 107, 100, 0.16);
+  --info-tint: rgba(255, 255, 255, 0.08);
+  --on-accent: #1e1e1e;
+  --font: "Montserrat", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2, h3 { text-wrap: balance; }
+abbr[title], .help { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 5;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.topbar-inner, .page {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding-inline: clamp(16px, 3vw, 32px);
+}
+.topbar-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 24px;
+  padding-block: 14px;
+}
+.brand { min-width: 0; }
+.brand h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+}
+.brand h1 .sep { color: var(--accent); margin-inline: 6px; }
+.brand p { margin: 2px 0 0; font-size: 12px; color: var(--fg-muted); }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+/* Stale badge: the data file is older than two polling intervals. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.badge.warn { color: var(--warn-ink); background: var(--warn-tint); border: 1px solid var(--warn); }
+.badge.crit { color: var(--crit-ink); background: var(--crit-tint); border: 1px solid var(--crit); }
+/* Segmented control (EN | FR): a bordered pill, the chosen segment filled
+   in the accent with dark text. */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.seg-btn {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.seg-btn:hover { background: var(--accent-tint); }
+.seg-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+
+/* ---------- page ---------- */
+.page { padding-block: 20px 48px; }
+.attention {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  padding: 10px 0 2px;
+}
+.attention span { display: inline-flex; align-items: center; gap: 7px; }
+.attention strong { color: var(--fg); font-weight: 600; }
+.sdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: inline-block;
+  flex: none;
+}
+.sdot.warn { background: var(--warn); }
+.sdot.crit { background: var(--crit); }
+.sdot.info { background: var(--fg-muted); }
+
+.section { margin-top: 30px; display: grid; gap: 12px; }
+.section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
+.section-head h2 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.section-head p { margin: 0; font-size: 12.5px; color: var(--fg-muted); }
+.note { margin: 0; font-size: 12.5px; color: var(--fg-muted); }
+.note strong { color: var(--fg); font-weight: 600; }
+/* "How the status is set" with a ? that shows the rule on hover or keyboard focus */
+.hq { position: relative; display: inline-flex; align-items: center; gap: 8px; }
+.hq .q {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: help;
+}
+.hq .box {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 4;
+  width: min(560px, calc(100vw - 48px));
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.hq:hover .box, .hq:focus-within .box { display: block; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 16px;
+  min-width: 0;
+}
+.card h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.card .caption { margin: 2px 0 0; font-size: 12px; color: var(--fg-muted); }
+
+/* tiles */
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.tile .label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.tile .value {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.tile .value small { font-size: 15px; font-weight: 600; color: var(--fg-muted); margin-left: 2px; }
+.tile .sub { font-size: 12px; color: var(--fg-muted); display: flex; align-items: center; gap: 7px; }
+
+/* grids */
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+
+/* tables */
+.table-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-width: 0;
+}
+.table-wrap h3 { margin: 0; padding: 14px 14px 0; font-size: 13px; font-weight: 600; }
+.table-wrap .caption { margin: 2px 0 0; padding: 0 14px; font-size: 12px; color: var(--fg-muted); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+table.wide { min-width: 640px; }
+table.mid { min-width: 420px; }
+th {
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.num { font-weight: 600; }
+td.muted { color: var(--fg-muted); }
+td.time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .id { color: var(--fg-muted); font-size: 12px; margin-left: 6px; }
+td.msg { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+tr.empty td { color: var(--fg-muted); text-align: center; padding: 18px; }
+
+/* status pills */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.pill.ok { color: var(--ok-ink); background: var(--accent-tint); }
+.pill.ok::before { background: var(--accent); }
+.pill.warn { color: var(--warn-ink); background: var(--warn-tint); }
+.pill.warn::before { background: var(--warn); }
+.pill.crit { color: var(--crit-ink); background: var(--crit-tint); }
+.pill.crit::before { background: var(--crit); }
+.pill.info { color: var(--fg-muted); background: var(--info-tint); }
+.pill.info::before { background: var(--fg-muted); }
+
+/* meters */
+.meters { display: grid; gap: 14px; margin-top: 14px; }
+.meter { display: grid; grid-template-columns: 76px minmax(0, 1fr) 48px; align-items: center; gap: 12px; font-size: 13px; }
+.meter .track { height: 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); overflow: hidden; position: relative; }
+.meter .fill { height: 100%; border-radius: 999px; background: var(--accent); }
+.meter .fill.warn { background: var(--warn); }
+.meter .fill.crit { background: var(--crit); }
+/* the warning threshold drawn on every track */
+.meter .mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--warn); opacity: 0.8; }
+.meter .mark.crit { background: var(--crit); }
+.meter .val { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.meter-note { margin: 14px 0 0; font-size: 12px; color: var(--fg-muted); }
+
+/* chart */
+.chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--fg-muted); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.swatch { width: 14px; height: 3px; border-radius: 2px; background: var(--series-2); display: inline-block; }
+.swatch.p95 { background: var(--series-1); }
+.chart { position: relative; margin-top: 10px; min-width: 0; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .tick { fill: var(--fg-muted); font-size: 11px; font-family: inherit; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .line.p95 { stroke: var(--series-1); }
+.chart .line.p50 { stroke: var(--series-2); }
+.chart .dot { stroke: var(--surface); stroke-width: 2; }
+.chart .dot.p95 { fill: var(--series-1); }
+.chart .dot.p50 { fill: var(--series-2); }
+/* Draw-in on first paint: each line traces from left to right, its
+   markers pop in as it reaches them, the end labels fade in last.
+   Resizes redraw without it. */
+.chart .dot.pop {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pop 260ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+}
+.chart .end-label.fade { animation: fade 400ms ease-out both; }
+@keyframes pop { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: scale(1); } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .chart .dot.pop, .chart .end-label.fade { animation: none; }
+}
+.chart .end-label { fill: var(--fg); font-size: 11px; font-weight: 600; font-family: inherit; }
+.chart .crosshair { stroke: var(--fg-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .empty { fill: var(--fg-muted); font-size: 12px; font-family: inherit; }
+.tip {
+  position: absolute;
+  top: 6px;
+  transform: translateX(-50%);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.tip strong { font-weight: 600; margin-right: 6px; }
+
+footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--fg-muted); }
+footer p { margin: 0 0 6px; }
+footer code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 11.5px; color: var(--fg); }
+
+@media (max-width: 1100px) { .grid-3 { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid-2 { grid-template-columns: 1fr; } }
+@media (max-width: 480px) { .tiles { grid-template-columns: 1fr; } .tile .value { font-size: 24px; } .meter { grid-template-columns: 64px minmax(0, 1fr) 44px; } }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <h1>AI Vision<span class="sep">|</span>System Health</h1>
+      <p id="subtitle"></p>
+    </div>
+    <div class="controls">
+      <span id="stale" class="badge warn" hidden></span>
+    </div>
+  </div>
+</header>
+
+<main class="page">
+
+  <div class="attention" id="attention" aria-label="Needs attention"></div>
+
+  <!-- ===== Executive overview ===== -->
+  <section class="section" id="overview">
+    <div class="section-head">
+      <h2 data-tx>Executive overview</h2>
+      <p id="overview-caption"></p>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <!-- ===== Processing performance ===== -->
+  <section class="section" id="performance">
+    <div class="section-head">
+      <h2 data-tx>Processing performance</h2>
+      <p data-tx>P50 and P95 per-image processing latency, seconds</p>
+    </div>
+    <div class="card">
+      <div class="chart-head">
+        <div>
+          <h3 data-tx>Latency per day</h3>
+          <p class="caption" id="chart-caption"></p>
+        </div>
+        <div class="legend" aria-hidden="true">
+          <span><i class="swatch"></i><span data-tx>P50 processing time</span></span>
+          <span><i class="swatch p95"></i><span data-tx>P95 processing time</span></span>
+        </div>
+      </div>
+      <div class="chart">
+        <svg id="latency-chart" viewBox="0 0 760 280" role="img"></svg>
+        <div class="tip" id="latency-tip" hidden></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Camera fleet ===== -->
+  <section class="section" id="cameras">
+    <div class="section-head">
+      <h2 data-tx>Camera fleet health</h2>
+      <p data-tx>Freshness per camera against its own refresh interval</p>
+    </div>
+    <div class="table-wrap">
+      <table class="wide" id="camera-table"></table>
+    </div>
+    <p class="note" id="camera-rule"></p>
+    <p class="note" id="camera-note"></p>
+  </section>
+
+  <!-- ===== Pipeline and delivery ===== -->
+  <section class="section" id="delivery">
+    <div class="section-head">
+      <h2 data-tx>Pipeline &amp; delivery</h2>
+      <p data-tx>Processing outcomes, WordPress delivery and API diagnostics</p>
+    </div>
+    <div class="grid-3">
+      <div class="table-wrap">
+        <h3 data-tx>Processing outcomes</h3>
+        <table class="mid" id="processing-table"></table>
+      </div>
+      <div class="table-wrap">
+        <h3 data-tx>WordPress API delivery</h3>
+        <table class="mid" id="delivery-table"></table>
+      </div>
+      <div class="table-wrap">
+        <h3 data-tx>API diagnostics</h3>
+        <table class="mid" id="api-table"></table>
+      </div>
+    </div>
+    <p class="note" data-tx>Skipped images (nobody in the frame) are excluded from the WordPress delivery success denominator.</p>
+  </section>
+
+  <!-- ===== Recent failures ===== -->
+  <section class="section" id="failures">
+    <div class="section-head">
+      <h2 data-tx>Recent failures</h2>
+      <p data-tx>The last 20 failed downloads, processing jobs and deliveries, newest first</p>
+    </div>
+    <div class="table-wrap">
+      <table class="wide" id="failures-table"></table>
+    </div>
+  </section>
+
+  <!-- ===== Infrastructure ===== -->
+  <section class="section" id="infrastructure">
+    <div class="section-head">
+      <h2 data-tx>Infrastructure</h2>
+      <p data-tx>Host utilization and storage footprint</p>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3 data-tx>Host utilization</h3>
+        <p class="caption" data-tx>Sampled on the pipeline host</p>
+        <div class="meters" id="meters"></div>
+        <p class="meter-note" id="meter-note"></p>
+      </div>
+      <div class="table-wrap">
+        <h3 data-tx>Storage footprint</h3>
+        <table class="mid" id="storage-table"></table>
+      </div>
+    </div>
+  </section>
+
+  <footer id="footer"></footer>
+</main>
+
+<!-- ===== DATA =====================================================================
+     The page renders everything from one JSON document in this contract. Today it is the
+     design's sample (mock: true). To go live, the pipeline host writes the same document
+     as health.json next to this page every cycle; served over HTTP the page fetches it
+     every minute and shows a STALE badge when it is older than stale_after_seconds.
+     Times are UTC ISO-8601; the page shows them in Eastern time.
+     Camera status is computed here from last_image_at, interval_seconds and
+     consecutive_failures with the thresholds block, so the rule shown is the rule used.
+     ================================================================================== -->
+<script id="health-data" type="application/json">
+{
+  "mock": true,
+  "generated_at": "2026-10-13T18:46:00Z",
+  "poll_interval_seconds": 60,
+  "stale_after_seconds": 180,
+  "window_days": 7,
+  "thresholds": {"delayed_factor": 1.5, "down_factor": 3, "down_failures": 3, "disk_warn": 85, "disk_crit": 95},
+  "scheduler": {"running": true, "last_successful_cycle_at": "2026-10-13T18:45:00Z", "last_cycle_ok": true, "last_error": null, "process_started_at": "2026-10-06T07:12:00Z"},
+  "cameras": [
+    {"id": "12846", "name": "Gallion Cam 1", "interval_seconds": 3600, "last_image_at": "2026-10-13T18:42:00Z", "last_processed_at": "2026-10-13T18:43:00Z", "consecutive_failures": 0, "last_error": null, "success_24h": 0.997, "frames_7d": 165, "expected_7d": 168},
+    {"id": "12875", "name": "Gallion Cam 2", "interval_seconds": 1200, "last_image_at": "2026-10-13T18:11:00Z", "last_processed_at": "2026-10-13T18:12:00Z", "consecutive_failures": 2, "last_error": "DownloadError: HTTP 504 from live-image.panomax.com", "success_24h": 0.961, "frames_7d": 471, "expected_7d": 504},
+    {"id": "12990", "name": "Gallion Cam 3", "interval_seconds": 3600, "last_image_at": "2026-10-13T18:40:00Z", "last_processed_at": "2026-10-13T18:41:00Z", "consecutive_failures": 0, "last_error": null, "success_24h": 0.984, "frames_7d": 166, "expected_7d": 168}
+  ],
+  "uptime": 0.998,
+  "processing": {"completed": 1816, "failed": 26, "pending": 4, "oldest_pending_seconds": 420, "success_rate": 0.986, "workers_per_image": 3.1, "p50_ms": 14100, "p95_ms": 26400},
+  "delivery": {"delivered": 842, "failed": 33, "skipped": 967, "success_rate": 0.962, "p95_latency_ms": 1800, "http": {"422": 6, "429": 2, "5xx": 1, "4xx": 0}},
+  "latency_days": [
+    {"day": "2026-10-07", "p50_ms": 13000, "p95_ms": 22000, "count": 258},
+    {"day": "2026-10-08", "p50_ms": 15000, "p95_ms": 27000, "count": 262},
+    {"day": "2026-10-09", "p50_ms": 14000, "p95_ms": 25000, "count": 260},
+    {"day": "2026-10-10", "p50_ms": 18000, "p95_ms": 34000, "count": 255},
+    {"day": "2026-10-11", "p50_ms": 15000, "p95_ms": 29000, "count": 263},
+    {"day": "2026-10-12", "p50_ms": 13000, "p95_ms": 24000, "count": 259},
+    {"day": "2026-10-13", "p50_ms": 14000, "p95_ms": 26000, "count": 245}
+  ],
+  "failures": [
+    {"at": "2026-10-13T18:31:00Z", "kind": "delivery", "camera_id": "12875", "http_status": 422, "message": "WordPress rejected delivery status=422 body={\"code\":\"rest_invalid_param\",\"message\":\"Invalid parameter(s): metadata\"}"},
+    {"at": "2026-10-13T18:27:00Z", "kind": "download", "camera_id": "12875", "http_status": 504, "message": "DownloadError: HTTP 504 from live-image.panomax.com"},
+    {"at": "2026-10-13T17:03:00Z", "kind": "processing", "camera_id": "12990", "http_status": null, "message": "ValidationError: image too small after crop (312x118)"},
+    {"at": "2026-10-13T12:48:00Z", "kind": "delivery", "camera_id": "12846", "http_status": 429, "message": "WordPress delivery failed after retries status=429"},
+    {"at": "2026-10-12T09:15:00Z", "kind": "delivery", "camera_id": "12990", "http_status": 503, "message": "WordPress delivery failed after retries status=503 body=Service Unavailable"}
+  ],
+  "host": {"cpu_percent": 62, "memory_percent": 71, "disk_percent": 78, "disk_total_bytes": 107374182400, "disk_used_bytes": 83751862272},
+  "storage": {"raw_bytes": 13743895347, "processed_bytes": 9019431321, "database_bytes": 1288490188}
+}
+</script>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- language: the browser's, unless ?lang= or an earlier choice says otherwise ----------
+  var FR = {
+    'AI Vision System Health': 'AI Vision – État du système',
+    'Language': 'Langue',
+    'Operational dashboard': 'Tableau de bord opérationnel',
+    'design sample, mock data only': 'maquette, données fictives seulement',
+    'live data': 'données en direct',
+    'data as of': 'données au',
+    'Stale: data is {age} old': 'Périmé : données vieilles de {age}',
+    'Needs attention': 'À surveiller',
+    'no new frame for {age} against a {interval} interval': 'aucune nouvelle image depuis {age} pour un intervalle de {interval}',
+    '{n} failed polls in a row': '{n} interrogations échouées de suite',
+    'all cameras healthy': 'toutes les caméras saines',
+    'WordPress API': 'API WordPress',
+    'rejected {n} delivery in the last 24 h (last: HTTP {status} at {time})': 'a rejeté {n} livraison dans les dernières 24 h (dernière : HTTP {status} à {time})',
+    'rejected {n} deliveries in the last 24 h (last: HTTP {status} at {time})': 'a rejeté {n} livraisons dans les dernières 24 h (dernière : HTTP {status} à {time})',
+    'no failed delivery in the last 24 h': 'aucune livraison échouée dans les dernières 24 h',
+    'Scheduler': 'Planificateur',
+    'active, last successful cycle {age} ago': 'actif, dernier cycle réussi il y a {age}',
+    'stopped, last successful cycle {age} ago': 'arrêté, dernier cycle réussi il y a {age}',
+    'last cycle failed: {error}': 'dernier cycle en échec : {error}',
+    'Executive overview': "Vue d'ensemble",
+    'Rolling {n}-day figures unless stated': 'Chiffres glissants sur {n} jours sauf indication contraire',
+    'Pipeline uptime': 'Disponibilité du pipeline',
+    'Share of the window during which the scheduler kept cycling (a gap longer than two polling intervals counts as downtime)': 'Part de la période pendant laquelle le planificateur a tourné (un trou de plus de deux intervalles compte comme une panne)',
+    'Last {n} days': '{n} derniers jours',
+    'Active cameras': 'Caméras actives',
+    '{h} healthy': '{h} saine(s)',
+    '{d} delayed': '{d} en retard',
+    '{x} down': '{x} hors service',
+    '{u} unknown': '{u} inconnue(s)',
+    'Processing success': 'Réussite du traitement',
+    'WordPress delivery': 'Livraison WordPress',
+    'Eligible attempts': 'Tentatives admissibles',
+    'Delivered / (delivered + failed); images with nobody in the frame are never sent and not counted': 'Livrées / (livrées + échouées) ; les images sans personne ne sont jamais envoyées et ne comptent pas',
+    'P95 processing': 'Traitement P95',
+    'P50: {v}': 'P50 : {v}',
+    'Pending jobs': 'Tâches en attente',
+    'Oldest: {age}': 'La plus ancienne : {age}',
+    'none': 'aucune',
+    'Last successful poll': 'Dernière interrogation réussie',
+    'Scheduler active': 'Planificateur actif',
+    'Scheduler stopped': 'Planificateur arrêté',
+    'Images processed': 'Images traitées',
+    '{p} of expected frames received': '{p} des images attendues reçues',
+    'Processing performance': 'Performance du traitement',
+    'P50 and P95 per-image processing latency, seconds': 'Latence de traitement par image P50 et P95, en secondes',
+    'Latency per day': 'Latence par jour',
+    'Hover a day for both values. {n} images in the last {d} days.': 'Survolez un jour pour voir les deux valeurs. {n} images dans les {d} derniers jours.',
+    'No processed image in this window yet.': 'Aucune image traitée dans cette période pour l’instant.',
+    'P50 processing time': 'Temps de traitement P50',
+    'P95 processing time': 'Temps de traitement P95',
+    'Line chart of P50 and P95 processing latency per day': 'Graphique linéaire de la latence de traitement P50 et P95 par jour',
+    'Camera fleet health': 'État du parc de caméras',
+    'Freshness per camera against its own refresh interval': 'Fraîcheur par caméra par rapport à son propre intervalle de rafraîchissement',
+    'Camera': 'Caméra',
+    'Interval': 'Intervalle',
+    'Last image': 'Dernière image',
+    'Last processed': 'Dernier traitement',
+    '24h success': 'Réussite 24 h',
+    'Frames (7 d)': 'Images (7 j)',
+    'received / expected at this interval': 'reçues / attendues à cet intervalle',
+    'Status': 'État',
+    'Healthy': 'Saine',
+    'Delayed': 'En retard',
+    'Down': 'Hors service',
+    'Unknown': 'Inconnue',
+    'never': 'jamais',
+    'How the status is set': 'Comment l’état est établi',
+    'Show how the status is set': 'Afficher comment l’état est établi',
+    'Healthy = a new frame arrived within {df}× the camera’s own interval. Delayed = no new frame for more than {df}× the interval. Down = no new frame for more than {dn}× the interval, or {nf} failed polls in a row. Unknown = no frame on file yet.': 'Saine = une nouvelle image est arrivée dans {df}× l’intervalle propre à la caméra. En retard = aucune nouvelle image depuis plus de {df}× l’intervalle. Hors service = aucune nouvelle image depuis plus de {dn}× l’intervalle, ou {nf} interrogations échouées de suite. Inconnue = aucune image en mémoire.',
+    'Intervals: {list}.': 'Intervalles : {list}.',
+    '{name} is {status}: {reason}.': '{name} est {status} : {reason}.',
+    'last error: {error}': 'dernière erreur : {error}',
+    'delayed': 'en retard',
+    'down': 'hors service',
+    'Pipeline & delivery': 'Pipeline et livraison',
+    'Processing outcomes, WordPress delivery and API diagnostics': "Résultats du traitement, livraison WordPress et diagnostics de l'API",
+    'Processing outcomes': 'Résultats du traitement',
+    'Metric': 'Mesure',
+    'Value': 'Valeur',
+    'Interpretation': 'Interprétation',
+    'Completed jobs': 'Tâches terminées',
+    'Jobs successfully processed': 'Tâches traitées avec succès',
+    'Failed jobs': 'Tâches échouées',
+    'Processing errors': 'Erreurs de traitement',
+    'Oldest pending job: {age}': 'Tâche en attente la plus ancienne : {age}',
+    'Success rate': 'Taux de réussite',
+    'Completed / (completed + failed)': 'Terminées / (terminées + échouées)',
+    'Average workers per image': 'Travailleurs en moyenne par image',
+    'Person detections per processed image': 'Détections de personnes par image traitée',
+    'WordPress API delivery': "Livraison via l'API WordPress",
+    'Outcome': 'Résultat',
+    'Count': 'Nombre',
+    'Meaning': 'Signification',
+    'Delivered': 'Livrées',
+    'Successfully delivered to WordPress': 'Livrées avec succès à WordPress',
+    'Failed': 'Échouées',
+    'Eligible deliveries that failed': 'Livraisons admissibles ayant échoué',
+    'Skipped, nobody in the frame': 'Ignorées, personne dans l’image',
+    'No person detections; intentionally not sent': 'Aucune détection de personne; volontairement non envoyées',
+    'Delivery success': 'Réussite des livraisons',
+    'Delivered / eligible attempts': 'Livrées / tentatives admissibles',
+    'API diagnostics': "Diagnostics de l'API",
+    'Signal': 'Signal',
+    'What to investigate': 'Quoi vérifier',
+    'P95 response latency': 'Latence de réponse P95',
+    'WordPress response performance': 'Performance de réponse de WordPress',
+    'Multipart metadata or validation issues': 'Problèmes de métadonnées multipart ou de validation',
+    'Rate limiting / backoff': 'Limitation de débit / attente',
+    'WordPress availability': 'Disponibilité de WordPress',
+    'Other HTTP 4xx': 'Autres HTTP 4xx',
+    'Authentication or endpoint configuration': 'Authentification ou configuration du point d’accès',
+    'Skipped images (nobody in the frame) are excluded from the WordPress delivery success denominator.': 'Les images ignorées (personne dans l’image) sont exclues du dénominateur de réussite des livraisons WordPress.',
+    'Recent failures': 'Échecs récents',
+    'The last 20 failed downloads, processing jobs and deliveries, newest first': 'Les 20 derniers échecs de téléchargement, de traitement et de livraison, du plus récent au plus ancien',
+    'Time': 'Heure',
+    'Kind': 'Type',
+    'HTTP': 'HTTP',
+    'Message': 'Message',
+    'download': 'téléchargement',
+    'processing': 'traitement',
+    'delivery': 'livraison',
+    'No failure recorded in the last 30 days.': 'Aucun échec enregistré dans les 30 derniers jours.',
+    'Infrastructure': 'Infrastructure',
+    'Host utilization and storage footprint': "Utilisation de l'hôte et empreinte de stockage",
+    'Host utilization': "Utilisation de l'hôte",
+    'Sampled on the pipeline host': "Mesuré sur l'hôte du pipeline",
+    'CPU': 'Processeur',
+    'Memory': 'Mémoire',
+    'Disk': 'Disque',
+    'Amber from {w}% (warning), red from {c}% (critical); the marks on each bar show the thresholds.': 'Ambre à partir de {w} % (avertissement), rouge à partir de {c} % (critique) ; les repères sur chaque barre montrent les seuils.',
+    'Disk is above the {w}% warning threshold.': 'Le disque dépasse le seuil d’avertissement de {w} %.',
+    'Disk is above the {c}% critical threshold.': 'Le disque dépasse le seuil critique de {c} %.',
+    'Storage footprint': 'Empreinte de stockage',
+    'Resource': 'Ressource',
+    'Size': 'Taille',
+    'Health implication': "Incidence sur l'état",
+    'Raw images': 'Images brutes',
+    'Retention and storage growth': 'Rétention et croissance du stockage',
+    'Processed images': 'Images traitées',
+    'Annotated image retention': 'Rétention des images annotées',
+    'PostgreSQL': 'PostgreSQL',
+    'Database capacity': 'Capacité de la base de données',
+    'Disk utilization': 'Utilisation du disque',
+    'Within limits': 'Dans les limites',
+    'Above warning threshold': 'Au-dessus du seuil d’avertissement',
+    'Above critical threshold': 'Au-dessus du seuil critique',
+    'This page renders the JSON in its health-data block. Served over HTTP it reads {file} next to itself every minute instead; a file older than {s} is flagged as stale. All times are shown in Eastern time.': 'Cette page affiche le JSON de son bloc health-data. Servie en HTTP, elle lit plutôt {file} à côté d’elle chaque minute ; un fichier plus vieux que {s} est signalé comme périmé. Toutes les heures sont affichées en heure de l’Est.',
+    'Design sample: the figures are illustrative until the pipeline host writes the file.': 'Maquette : les chiffres sont illustratifs tant que l’hôte du pipeline n’écrit pas le fichier.',
+    '{n} min': '{n} min',
+    '{n} h': '{n} h',
+    '{n} d': '{n} j',
+    '{n} s': '{n} s',
+    '{age} ago': 'il y a {age}',
+    'Mon': 'lun.', 'Tue': 'mar.', 'Wed': 'mer.', 'Thu': 'jeu.', 'Fri': 'ven.', 'Sat': 'sam.', 'Sun': 'dim.'
+  };
+
+  var SITE_TZ = 'America/Toronto';   // Eastern time, as the reviewer asked
+  var DATA_FILE = 'health.json';
+  var REFRESH_MS = 60000;
+
+  var lang = 'en';
+  try {
+    var q = new URLSearchParams(location.search).get('lang');
+    var browser = (navigator.language || '').toLowerCase().indexOf('fr') === 0 ? 'fr' : 'en';
+    lang = (q === 'fr' || q === 'en') ? q : browser;
+  } catch (e) {}
+
+  function tx(text, values) {
+    var out = (lang === 'fr' && Object.prototype.hasOwnProperty.call(FR, text)) ? FR[text] : text;
+    if (values) {
+      Object.keys(values).forEach(function (key) {
+        out = out.split('{' + key + '}').join(String(values[key]));
+      });
+    }
+    return out;
+  }
+  window.tx = tx;
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // ---------- numbers and times ----------
+  var LOC = function () { return lang === 'fr' ? 'fr-CA' : 'en-GB'; };
+  function pct(v, digits) {
+    if (v == null || isNaN(v)) return '–';
+    var n = (v * 100).toLocaleString(LOC(), { minimumFractionDigits: digits == null ? 1 : digits, maximumFractionDigits: digits == null ? 1 : digits });
+    return lang === 'fr' ? n + ' %' : n + '%';
+  }
+  function int(v) { return v == null ? '–' : Math.round(v).toLocaleString(LOC()); }
+  function sec(ms) { return ms == null ? '–' : (ms / 1000).toLocaleString(LOC(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' s'; }
+  function gb(bytes) { return bytes == null ? '–' : (bytes / 1e9).toLocaleString(LOC(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' GB'; }
+  function parseTs(value) { if (!value) return null; var d = new Date(value); return isNaN(d) ? null : d; }
+  function fmtTime(d) { return d ? d.toLocaleTimeString(LOC(), { hour: '2-digit', minute: '2-digit', timeZone: SITE_TZ }) : '–'; }
+  function fmtDateTime(d) { return d ? d.toLocaleString(LOC(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: SITE_TZ }) : '–'; }
+  function weekday(dayKey) {
+    var d = new Date(dayKey + 'T12:00:00Z');
+    var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return tx(names[d.getUTCDay()]);
+  }
+  // "4 min", "2 h", "3 d": the unit that fits
+  function span(seconds) {
+    if (seconds == null || isNaN(seconds)) return '–';
+    seconds = Math.max(0, seconds);
+    if (seconds < 60) return tx('{n} s', { n: Math.round(seconds) });
+    if (seconds < 3600) return tx('{n} min', { n: Math.round(seconds / 60) });
+    if (seconds < 86400) return tx('{n} h', { n: Math.round(seconds / 3600 * 10) / 10 });
+    return tx('{n} d', { n: Math.round(seconds / 86400 * 10) / 10 });
+  }
+  function ago(seconds) { return seconds == null ? tx('never') : tx('{age} ago', { age: span(seconds) }); }
+  function interval(seconds) { return seconds >= 3600 && seconds % 3600 === 0 ? tx('{n} h', { n: seconds / 3600 }) : tx('{n} min', { n: Math.round(seconds / 60) }); }
+
+  // ---------- derived facts ----------
+  // Ages are measured from the file's own time for the design sample, so it reads the same
+  // whenever it is opened; live data uses the real clock.
+  function clock(data) { return data.mock ? parseTs(data.generated_at) || new Date() : new Date(); }
+  function ageOf(ts, now) { var d = parseTs(ts); return d ? (now - d) / 1000 : null; }
+
+  function cameraStatus(cam, data, now) {
+    var th = data.thresholds || {};
+    var age = ageOf(cam.last_image_at, now);
+    var iv = cam.interval_seconds || 3600;
+    if ((cam.consecutive_failures || 0) >= (th.down_failures || 3)) return { key: 'down', age: age };
+    if (age == null) return { key: 'unknown', age: null };
+    if (age > iv * (th.down_factor || 3)) return { key: 'down', age: age };
+    if (age > iv * (th.delayed_factor || 1.5)) return { key: 'delayed', age: age };
+    return { key: 'healthy', age: age };
+  }
+  var PILL = { healthy: ['ok', 'Healthy'], delayed: ['warn', 'Delayed'], down: ['crit', 'Down'], unknown: ['info', 'Unknown'] };
+
+  function reasonFor(cam, status) {
+    var parts = [];
+    if (status.age != null && status.key !== 'healthy') parts.push(tx('no new frame for {age} against a {interval} interval', { age: span(status.age), interval: interval(cam.interval_seconds || 3600) }));
+    if ((cam.consecutive_failures || 0) > 0) parts.push(tx('{n} failed polls in a row', { n: cam.consecutive_failures }));
+    return parts.join(', ');
+  }
+
+  // ---------- rendering ----------
+  function el(id) { return document.getElementById(id); }
+
+  function renderStatic() {
+    document.documentElement.setAttribute('lang', lang);
+    document.title = tx('AI Vision System Health');
+    var nodes = document.querySelectorAll('[data-tx]');
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (!n.dataset.en) n.dataset.en = n.textContent.trim();
+      n.innerHTML = tx(n.dataset.en).replace('&', '&amp;');
+    }
+    el('attention').setAttribute('aria-label', tx('Needs attention'));
+  }
+
+  function renderTop(data, now) {
+    var gen = parseTs(data.generated_at);
+    el('subtitle').textContent = tx('Operational dashboard') + ' · ' + tx('data as of') + ' ' + fmtDateTime(gen) + ' · ' + (data.mock ? tx('design sample, mock data only') : tx('live data'));
+    var stale = el('stale');
+    var staleAfter = data.stale_after_seconds || (data.poll_interval_seconds || 60) * 2;
+    var age = gen ? (new Date() - gen) / 1000 : null;
+    if (!data.mock && age != null && age > staleAfter) {
+      stale.textContent = tx('Stale: data is {age} old', { age: span(age) });
+      stale.hidden = false;
+    } else {
+      stale.hidden = true;
+    }
+  }
+
+  function renderAttention(data, now) {
+    var items = [];
+    var cams = data.cameras || [];
+    var unhealthy = cams.map(function (cam) { return { cam: cam, st: cameraStatus(cam, data, now) }; }).filter(function (x) { return x.st.key === 'delayed' || x.st.key === 'down'; });
+    if (unhealthy.length) {
+      unhealthy.forEach(function (x) {
+        items.push('<span><i class="sdot ' + (x.st.key === 'down' ? 'crit' : 'warn') + '"></i><strong>' + esc(x.cam.name || x.cam.id) + ' (' + esc(x.cam.id) + ')</strong> ' + esc(reasonFor(x.cam, x.st)) + '</span>');
+      });
+    } else {
+      items.push('<span><i class="sdot"></i><strong>' + tx('Camera') + '</strong> ' + tx('all cameras healthy') + '</span>');
+    }
+    var dayAgo = now - 86400000;
+    var rejected = (data.failures || []).filter(function (f) { return f.kind === 'delivery' && parseTs(f.at) && parseTs(f.at) > dayAgo; });
+    if (rejected.length) {
+      var last = rejected[0];
+      items.push('<span><i class="sdot crit"></i><strong>' + tx('WordPress API') + '</strong> ' + esc(tx(rejected.length === 1 ? 'rejected {n} delivery in the last 24 h (last: HTTP {status} at {time})' : 'rejected {n} deliveries in the last 24 h (last: HTTP {status} at {time})', { n: rejected.length, status: last.http_status == null ? '–' : last.http_status, time: fmtTime(parseTs(last.at)) })) + '</span>');
+    } else {
+      items.push('<span><i class="sdot"></i><strong>' + tx('WordPress API') + '</strong> ' + tx('no failed delivery in the last 24 h') + '</span>');
+    }
+    var s = data.scheduler || {};
+    var lastOk = ageOf(s.last_successful_cycle_at, now);
+    var running = s.running !== false && lastOk != null && lastOk <= (data.stale_after_seconds || 180);
+    var text = running ? tx('active, last successful cycle {age} ago', { age: span(lastOk) }) : tx('stopped, last successful cycle {age} ago', { age: lastOk == null ? '–' : span(lastOk) });
+    if (s.last_cycle_ok === false && s.last_error) text += ' · ' + tx('last cycle failed: {error}', { error: s.last_error });
+    items.push('<span><i class="sdot ' + (running ? '' : 'crit') + '"></i><strong>' + tx('Scheduler') + '</strong> ' + esc(text) + '</span>');
+    el('attention').innerHTML = items.join('');
+    return running;
+  }
+
+  function tile(label, value, unit, sub, dot, help) {
+    return '<div class="tile"><span class="label">' + (help ? '<span class="help" title="' + esc(help) + '">' + esc(label) + '</span>' : esc(label)) + '</span>' +
+      '<span class="value">' + esc(value) + (unit ? '<small>' + esc(unit) + '</small>' : '') + '</span>' +
+      '<span class="sub">' + (dot ? '<i class="sdot ' + dot + '"></i>' : '') + esc(sub) + '</span></div>';
+  }
+
+  function renderTiles(data, now, running) {
+    var days = data.window_days || 7;
+    var p = data.processing || {}, d = data.delivery || {}, s = data.scheduler || {};
+    var cams = data.cameras || [];
+    var counts = { healthy: 0, delayed: 0, down: 0, unknown: 0 };
+    cams.forEach(function (cam) { counts[cameraStatus(cam, data, now).key]++; });
+    var camSub = [tx('{h} healthy', { h: counts.healthy })];
+    if (counts.delayed) camSub.push(tx('{d} delayed', { d: counts.delayed }));
+    if (counts.down) camSub.push(tx('{x} down', { x: counts.down }));
+    if (counts.unknown) camSub.push(tx('{u} unknown', { u: counts.unknown }));
+    var camDot = counts.down ? 'crit' : counts.delayed ? 'warn' : counts.unknown ? 'info' : '';
+    var frames = 0, expected = 0;
+    cams.forEach(function (cam) { frames += cam.frames_7d || 0; expected += cam.expected_7d || 0; });
+    var lastOk = ageOf(s.last_successful_cycle_at, now);
+    el('overview-caption').textContent = tx('Rolling {n}-day figures unless stated', { n: days });
+    el('tiles').innerHTML =
+      tile(tx('Pipeline uptime'), data.uptime == null ? '–' : pct(data.uptime), '', tx('Last {n} days', { n: days }), '', tx('Share of the window during which the scheduler kept cycling (a gap longer than two polling intervals counts as downtime)')) +
+      tile(tx('Active cameras'), (counts.healthy + counts.delayed) + ' / ' + cams.length, '', camSub.join(', '), camDot) +
+      tile(tx('Processing success'), pct(p.success_rate), '', tx('Last {n} days', { n: days })) +
+      tile(tx('WordPress delivery'), pct(d.success_rate), '', tx('Eligible attempts'), '', tx('Delivered / (delivered + failed); images with nobody in the frame are never sent and not counted')) +
+      tile(tx('P95 processing'), p.p95_ms == null ? '–' : (p.p95_ms / 1000).toLocaleString(LOC(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }), 's', tx('P50: {v}', { v: sec(p.p50_ms) })) +
+      tile(tx('Pending jobs'), int(p.pending), '', tx('Oldest: {age}', { age: p.pending ? span(p.oldest_pending_seconds) : tx('none') })) +
+      tile(tx('Last successful poll'), lastOk == null ? '–' : span(lastOk).replace(/ .*/, ''), lastOk == null ? '' : span(lastOk).replace(/^\S+ ?/, ''), running ? tx('Scheduler active') : tx('Scheduler stopped'), running ? '' : 'crit') +
+      tile(tx('Images processed'), int(p.completed), '', expected ? tx('{p} of expected frames received', { p: pct(frames / expected, 0) }) : tx('Last {n} days', { n: days }));
+  }
+
+  function renderCameras(data, now) {
+    var th = data.thresholds || {};
+    var rows = (data.cameras || []).map(function (cam) {
+      var st = cameraStatus(cam, data, now);
+      var pill = PILL[st.key];
+      var title = reasonFor(cam, st) || tx('Healthy');
+      return '<tr><td><strong>' + esc(cam.name || tx('Camera') + ' ' + cam.id) + '</strong><span class="id">' + esc(cam.id) + '</span></td>' +
+        '<td class="muted">' + esc(interval(cam.interval_seconds || 3600)) + '</td>' +
+        '<td class="muted">' + esc(ago(ageOf(cam.last_image_at, now))) + '</td>' +
+        '<td class="muted">' + esc(ago(ageOf(cam.last_processed_at, now))) + '</td>' +
+        '<td class="num">' + esc(pct(cam.success_24h)) + '</td>' +
+        '<td class="num">' + esc(int(cam.frames_7d)) + ' / ' + esc(int(cam.expected_7d)) + '</td>' +
+        '<td><span class="pill ' + pill[0] + '" title="' + esc(title) + '">' + esc(tx(pill[1])) + '</span></td></tr>';
+    }).join('');
+    el('camera-table').innerHTML = '<thead><tr><th>' + tx('Camera') + '</th><th>' + tx('Interval') + '</th><th>' + tx('Last image') + '</th><th>' + tx('Last processed') + '</th><th class="num">' + tx('24h success') + '</th><th class="num" title="' + esc(tx('received / expected at this interval')) + '">' + tx('Frames (7 d)') + '</th><th>' + tx('Status') + '</th></tr></thead><tbody>' + rows + '</tbody>';
+    var list = (data.cameras || []).map(function (cam) { return (cam.name || cam.id) + ' ' + interval(cam.interval_seconds || 3600); }).join(', ');
+    var rule = esc(tx('Healthy = a new frame arrived within {df}× the camera’s own interval. Delayed = no new frame for more than {df}× the interval. Down = no new frame for more than {dn}× the interval, or {nf} failed polls in a row. Unknown = no frame on file yet.', { df: th.delayed_factor || 1.5, dn: th.down_factor || 3, nf: th.down_failures || 3 })) + ' ' + esc(tx('Intervals: {list}.', { list: list }));
+    el('camera-rule').innerHTML = '<span class="hq"><strong>' + esc(tx('How the status is set')) + '</strong><span class="q" tabindex="0" role="button" aria-label="' + esc(tx('Show how the status is set')) + '" aria-describedby="status-rule">?</span><span class="box" id="status-rule" role="tooltip">' + rule + '</span></span>';
+    var notes = (data.cameras || []).map(function (cam) {
+      var st = cameraStatus(cam, data, now);
+      if (st.key === 'healthy' || st.key === 'unknown') return '';
+      var reason = reasonFor(cam, st);
+      if (cam.last_error) reason += (reason ? '; ' : '') + tx('last error: {error}', { error: cam.last_error });
+      return tx('{name} is {status}: {reason}.', { name: cam.name || cam.id, status: tx(st.key), reason: reason });
+    }).filter(Boolean);
+    el('camera-note').textContent = notes.join(' ');
+    el('camera-note').hidden = !notes.length;
+  }
+
+  function table3(id, head, rows) {
+    el(id).innerHTML = '<thead><tr><th>' + head[0] + '</th><th class="num">' + head[1] + '</th><th>' + head[2] + '</th></tr></thead><tbody>' +
+      rows.map(function (r) { return '<tr><td>' + esc(r[0]) + '</td><td class="num">' + (r[3] ? r[1] : esc(r[1])) + '</td><td class="muted">' + (r[3] ? r[2] : esc(r[2])) + '</td></tr>'; }).join('') + '</tbody>';
+  }
+
+  function renderPipeline(data) {
+    var p = data.processing || {}, d = data.delivery || {}, h = d.http || {};
+    var th = data.thresholds || {};
+    table3('processing-table', [tx('Metric'), tx('Value'), tx('Interpretation')], [
+      [tx('Completed jobs'), int(p.completed), tx('Jobs successfully processed')],
+      [tx('Failed jobs'), int(p.failed), tx('Processing errors')],
+      [tx('Pending jobs'), int(p.pending), tx('Oldest pending job: {age}', { age: p.pending ? span(p.oldest_pending_seconds) : tx('none') })],
+      [tx('Success rate'), pct(p.success_rate), tx('Completed / (completed + failed)')],
+      [tx('Average workers per image'), p.workers_per_image == null ? '–' : p.workers_per_image.toLocaleString(LOC(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }), tx('Person detections per processed image')]
+    ]);
+    table3('delivery-table', [tx('Outcome'), tx('Count'), tx('Meaning')], [
+      [tx('Delivered'), int(d.delivered), tx('Successfully delivered to WordPress')],
+      [tx('Failed'), int(d.failed), tx('Eligible deliveries that failed')],
+      [tx('Skipped, nobody in the frame'), int(d.skipped), tx('No person detections; intentionally not sent')],
+      [tx('Delivery success'), pct(d.success_rate), tx('Delivered / eligible attempts')]
+    ]);
+    table3('api-table', [tx('Signal'), tx('Value'), tx('What to investigate')], [
+      [tx('P95 response latency'), sec(d.p95_latency_ms), tx('WordPress response performance')],
+      ['HTTP 422', int(h['422']), tx('Multipart metadata or validation issues')],
+      ['HTTP 429', int(h['429']), tx('Rate limiting / backoff')],
+      ['HTTP 5xx', int(h['5xx']), tx('WordPress availability')],
+      [tx('Other HTTP 4xx'), int(h['4xx']), tx('Authentication or endpoint configuration')]
+    ]);
+    void th;
+  }
+
+  function renderFailures(data) {
+    var rows = (data.failures || []).slice(0, 20).map(function (f) {
+      var ts = parseTs(f.at);
+      return '<tr><td class="time">' + esc(fmtDateTime(ts)) + '</td><td><span class="pill ' + (f.kind === 'delivery' ? 'crit' : f.kind === 'download' ? 'warn' : 'info') + '">' + esc(tx(f.kind || '')) + '</span></td>' +
+        '<td>' + esc(cameraName(data, f.camera_id)) + '</td><td class="num">' + esc(f.http_status == null ? '–' : f.http_status) + '</td><td class="msg" title="' + esc(f.message) + '">' + esc(f.message) + '</td></tr>';
+    }).join('');
+    if (!rows) rows = '<tr class="empty"><td colspan="5">' + esc(tx('No failure recorded in the last 30 days.')) + '</td></tr>';
+    el('failures-table').innerHTML = '<thead><tr><th>' + tx('Time') + '</th><th>' + tx('Kind') + '</th><th>' + tx('Camera') + '</th><th class="num">' + tx('HTTP') + '</th><th>' + tx('Message') + '</th></tr></thead><tbody>' + rows + '</tbody>';
+  }
+
+  function cameraName(data, id) {
+    if (id == null) return '–';
+    var cam = (data.cameras || []).filter(function (c) { return String(c.id) === String(id); })[0];
+    return cam && cam.name ? cam.name + ' (' + id + ')' : String(id);
+  }
+
+  function meter(label, value, warn, crit) {
+    var cls = value >= crit ? 'crit' : value >= warn ? 'warn' : '';
+    return '<div class="meter"><span>' + esc(label) + '</span><div class="track"><div class="fill ' + cls + '" style="width:' + Math.max(0, Math.min(100, value || 0)) + '%"></div><i class="mark" style="left:' + warn + '%"></i><i class="mark crit" style="left:' + crit + '%"></i></div><span class="val">' + (value == null ? '–' : Math.round(value) + '%') + '</span></div>';
+  }
+
+  function renderInfra(data) {
+    var th = data.thresholds || {}, warn = th.disk_warn || 85, crit = th.disk_crit || 95;
+    var h = data.host || {}, s = data.storage || {};
+    el('meters').innerHTML = meter(tx('CPU'), h.cpu_percent, warn, crit) + meter(tx('Memory'), h.memory_percent, warn, crit) + meter(tx('Disk'), h.disk_percent, warn, crit);
+    var note = tx('Amber from {w}% (warning), red from {c}% (critical); the marks on each bar show the thresholds.', { w: warn, c: crit });
+    if (h.disk_percent >= crit) note = tx('Disk is above the {c}% critical threshold.', { c: crit }) + ' ' + note;
+    else if (h.disk_percent >= warn) note = tx('Disk is above the {w}% warning threshold.', { w: warn }) + ' ' + note;
+    el('meter-note').textContent = note;
+    var diskPill = h.disk_percent >= crit ? ['crit', 'Above critical threshold'] : h.disk_percent >= warn ? ['warn', 'Above warning threshold'] : ['ok', 'Within limits'];
+    table3('storage-table', [tx('Resource'), tx('Size'), tx('Health implication')], [
+      [tx('Raw images'), gb(s.raw_bytes), tx('Retention and storage growth')],
+      [tx('Processed images'), gb(s.processed_bytes), tx('Annotated image retention')],
+      [tx('PostgreSQL'), gb(s.database_bytes), tx('Database capacity')],
+      [tx('Disk utilization'), h.disk_percent == null ? '–' : Math.round(h.disk_percent) + '%', '<span class="pill ' + diskPill[0] + '">' + esc(tx(diskPill[1])) + '</span>', true]
+    ]);
+  }
+
+  function renderFooter(data) {
+    var staleAfter = data.stale_after_seconds || (data.poll_interval_seconds || 60) * 2;
+    var html = '<p>' + esc(tx('This page renders the JSON in its health-data block. Served over HTTP it reads {file} next to itself every minute instead; a file older than {s} is flagged as stale. All times are shown in Eastern time.', { file: DATA_FILE, s: span(staleAfter) })).replace(DATA_FILE, '<code>' + DATA_FILE + '</code>') + '</p>';
+    if (data.mock) html += '<p>' + esc(tx('Design sample: the figures are illustrative until the pipeline host writes the file.')) + '</p>';
+    el('footer').innerHTML = html;
+  }
+
+  // ---------- latency chart: drawn at the container's real pixel width, autoscaled ----------
+  var chart = (function () {
+    var H = 280, L = 44, R = 76, T = 18, B = 34;
+    var svg = el('latency-chart'), tip = el('latency-tip'), wrap = svg.parentElement;
+    var ns = 'http://www.w3.org/2000/svg';
+    var W = 760, cross = null, series = { days: [], p50: [], p95: [] }, yMax = 40;
+    var DRAW = 900, LAG = 150;
+
+    function x(i) { var n = Math.max(1, series.days.length - 1); return L + (W - L - R) * i / n; }
+    function y(v) { return T + (H - T - B) * (1 - v / yMax); }
+    function node(name, attrs, text) { var e = document.createElementNS(ns, name); for (var k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; }
+    function path(arr) { var d = '', started = false; arr.forEach(function (v, i) { if (v == null) { started = false; return; } d += (started ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1); started = true; }); return d; }
+    function reduced() { return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+    function hide() { if (cross) cross.setAttribute('visibility', 'hidden'); tip.hidden = true; }
+    function show(i) {
+      cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
+      tip.innerHTML = '<strong>' + esc(weekday(series.days[i])) + '</strong>P50 ' + esc(fmtVal(series.p50[i])) + ' · P95 ' + esc(fmtVal(series.p95[i]));
+      tip.hidden = false;
+      var width = wrap.getBoundingClientRect().width;
+      tip.style.left = Math.min(Math.max(x(i) / W * width, 80), width - 80) + 'px';
+    }
+    function fmtVal(v) { return v == null ? '–' : v.toLocaleString(LOC(), { maximumFractionDigits: 1 }) + ' s'; }
+    function drawLine(arr, cls, order, animate) {
+      var line = node('path', { d: path(arr), 'class': 'line ' + cls });
+      svg.appendChild(line);
+      if (!animate || reduced()) return;
+      var length = line.getTotalLength() + 'px';
+      line.style.strokeDasharray = length;
+      line.animate([{ strokeDashoffset: length }, { strokeDashoffset: '0px' }], { duration: DRAW, delay: order * LAG, easing: 'ease-out', fill: 'both' });
+    }
+    function drawDots(arr, cls, order, animate) {
+      var step = DRAW / Math.max(1, series.days.length - 1);
+      arr.forEach(function (v, i) {
+        if (v == null) return;
+        var dot = node('circle', { cx: x(i), cy: y(v), r: 4, 'class': 'dot ' + cls });
+        if (animate) { dot.classList.add('pop'); dot.style.animationDelay = Math.round(order * LAG + i * step) + 'ms'; }
+        svg.appendChild(dot);
+      });
+    }
+    function endLabel(text, v, animate) {
+      if (v == null) return;
+      var label = node('text', { x: x(series.days.length - 1) + 9, y: y(v) + 4, 'class': 'end-label' }, text);
+      if (animate) { label.classList.add('fade'); label.style.animationDelay = (DRAW + LAG) + 'ms'; }
+      svg.appendChild(label);
+    }
+    function render(animate) {
+      W = Math.max(320, Math.round(wrap.clientWidth));
+      svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('width', String(W)); svg.setAttribute('height', String(H));
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      hide();
+      if (!series.days.length) { svg.appendChild(node('text', { x: W / 2, y: H / 2, 'class': 'empty', 'text-anchor': 'middle' }, tx('No processed image in this window yet.'))); return; }
+      var peak = Math.max.apply(null, series.p95.concat(series.p50).filter(function (v) { return v != null; }).concat([1]));
+      var step = peak <= 20 ? 5 : peak <= 60 ? 10 : peak <= 150 ? 25 : 50;
+      yMax = Math.max(step, Math.ceil(peak * 1.15 / step) * step);
+      for (var v = 0; v <= yMax; v += step) {
+        svg.appendChild(node('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), 'class': 'grid' }));
+        svg.appendChild(node('text', { x: L - 8, y: y(v) + 4, 'class': 'tick', 'text-anchor': 'end' }, String(v)));
+      }
+      series.days.forEach(function (d, i) { svg.appendChild(node('text', { x: x(i), y: H - 12, 'class': 'tick', 'text-anchor': 'middle' }, weekday(d))); });
+      drawLine(series.p50, 'p50', 0, animate); drawLine(series.p95, 'p95', 1, animate);
+      drawDots(series.p50, 'p50', 0, animate); drawDots(series.p95, 'p95', 1, animate);
+      var last = series.days.length - 1;
+      endLabel('P95 ' + fmtVal(series.p95[last]), series.p95[last], animate);
+      endLabel('P50 ' + fmtVal(series.p50[last]), series.p50[last], animate);
+      cross = node('line', { 'class': 'crosshair', x1: x(0), x2: x(0), y1: T, y2: H - B, visibility: 'hidden' });
+      svg.appendChild(cross);
+      var hit = node('rect', { x: L, y: T, width: W - L - R, height: H - T - B, fill: 'transparent' });
+      svg.appendChild(hit);
+      hit.addEventListener('pointermove', function (e) {
+        var rect = svg.getBoundingClientRect(), fx = (e.clientX - rect.left) / rect.width * W, best = 0;
+        for (var i = 1; i < series.days.length; i++) if (Math.abs(x(i) - fx) < Math.abs(x(best) - fx)) best = i;
+        show(best);
+      });
+      hit.addEventListener('pointerleave', hide);
+    }
+    function setData(data) {
+      var days = (data.latency_days || []).slice(-(data.window_days || 7));
+      series = {
+        days: days.map(function (d) { return d.day; }),
+        p50: days.map(function (d) { return d.p50_ms == null ? null : d.p50_ms / 1000; }),
+        p95: days.map(function (d) { return d.p95_ms == null ? null : d.p95_ms / 1000; })
+      };
+      var total = days.reduce(function (a, d) { return a + (d.count || 0); }, 0);
+      el('chart-caption').textContent = days.length ? tx('Hover a day for both values. {n} images in the last {d} days.', { n: int(total), d: data.window_days || 7 }) : tx('No processed image in this window yet.');
+      svg.setAttribute('aria-label', tx('Line chart of P50 and P95 processing latency per day'));
+    }
+    var timer = null;
+    window.addEventListener('resize', function () { clearTimeout(timer); timer = setTimeout(function () { render(false); }, 120); });
+    return { setData: setData, render: render };
+  })();
+
+  // ---------- data: the embedded block, then health.json when served over HTTP ----------
+  var DATA = null;
+  function embedded() {
+    try { return JSON.parse(el('health-data').textContent); } catch (e) { return null; }
+  }
+  function renderAll(animate) {
+    if (!DATA) return;
+    var now = clock(DATA);
+    renderStatic();
+    renderTop(DATA, now);
+    var running = renderAttention(DATA, now);
+    renderTiles(DATA, now, running);
+    chart.setData(DATA);
+    chart.render(animate);
+    renderCameras(DATA, now);
+    renderPipeline(DATA);
+    renderFailures(DATA);
+    renderInfra(DATA);
+    renderFooter(DATA);
+  }
+  function refresh() {
+    fetch(DATA_FILE, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (data) {
+      if (data && data.generated_at) { data.mock = false; DATA = data; renderAll(false); }
+    }).catch(function () {});
+  }
+
+  DATA = embedded();
+  renderAll(true);
+  if (/^https?:$/.test(location.protocol)) { refresh(); setInterval(refresh, REFRESH_MS); }
+})();
+</script>
+</body>
+</html>

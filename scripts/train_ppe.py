@@ -158,10 +158,7 @@ def _install(best: Path) -> None:
     if backup:
         print(f"Previous weights kept at {backup}")
 
-    print(
-        "Restart the pipeline (or rebuild the Docker image) to load "
-        "the new weights."
-    )
+    print("A running pipeline picks the new weights up on its next frame.")
 
 
 def _compare_and_maybe_install(

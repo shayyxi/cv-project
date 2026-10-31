@@ -170,10 +170,13 @@ dataset, then either:
   from and redeploy (the weights ship with the image), or
 - copy the new `best.pt` into `app/processing/cv/weights/` on the host;
   `docker-compose.yml` mounts that folder read-only into the container,
-  so restart the `app` service to load it.
+  and the engine reloads it on the next frame.
 
-The engine only reads the weights at start-up, so a restart is always
-needed after installing new weights.
+The engine checks the weights file's modification time before each
+frame and reloads it when it changed, so no restart is needed after
+installing new weights. Copy to a temporary name and rename over
+`best.pt` (what `install_weights` does) so the engine never sees a
+half-written file; a file that fails to load keeps the previous model.
 
 ### Class order
 
@@ -196,7 +199,7 @@ fair. Nothing to configure; it only kicks in when the orders differ.
   log says "no valid split - validating on the train split", set
   `ROBOFLOW_VALID_SPLIT_PERCENT` above zero, or move some images to
   `valid` or `test` in Roboflow, before trusting the numbers.
-- Spot-check a few processed frames after the restart.
+- Spot-check a few processed frames after the install.
 
 ---
 
@@ -215,16 +218,25 @@ Start it by double-clicking `retrain_ui.bat` in the project folder, or:
 streamlit run scripts/retrain_ui.py
 ```
 
-The browser opens on http://localhost:8501 with:
+The browser opens on http://localhost:8501 as a dashboard: a menu on
+the left with one page per task, and under it two switches: DARK /
+LIGHT and EN / FR. The app opens in English
+and dark; both choices last for the browser session. The French text
+lives in the `FR` table at the top of `scripts/retrain_ui.py`, keyed
+by the English it replaces.
 
-- **Upload label queue to Roboflow**: shows how many crops are waiting
-  and runs `python -m scripts.roboflow_upload`. "Dry run" only counts.
-- **Train and deploy**: epochs, device and "generate a new version",
-  then runs `python -m scripts.train_ppe` with those flags. Nothing is
+- **Upload to Roboflow**: shows how many crops are waiting and runs
+  `python -m scripts.roboflow_upload`. "Dry run" only counts. Under
+  the status, **Crops in the queue** shows the crops themselves, 24 a
+  page, filtered by state (pending, uploaded, all) and camera, each
+  with its frame time, person, pre-labels and upload state.
+- **Retraining**: epochs, device and "generate a new version", then
+  runs `python -m scripts.train_ppe` with those flags. Nothing is
   replaced automatically; the comparison and the replace button are at
-  the bottom of the page.
+  the bottom of that page.
+- **Crop regions**: the per-camera crops, described further down.
 
-Each button starts the script in the background. The page shows a
+Each button starts the script in the background. Its page shows a
 progress bar built from the log (dataset download, epoch and batch,
 validation, model comparison, outcome), a **Stop** button while a job
 runs, and the last 200 log lines in an expander, refreshing every two
@@ -234,7 +246,8 @@ meanwhile. Logs are kept under `data/analytics/ui_logs/`.
 Stopping a training kills it and everything it spawned; the run folder
 keeps `last.pt`, and nothing is installed.
 
-Under the status, **Last model comparison** shows the most recent
+Under the status on the Retraining page, **Last model comparison**
+shows the most recent
 comparison: deployed vs new for precision, recall, mAP50 and mAP50-95,
 mAP50-95 per class with the delta, and a bar chart. It is read from
 `data/analytics/training/latest_comparison.json`, which the training
@@ -245,20 +258,88 @@ Below the numbers is the decision: **Replace deployed model with this
 one** copies the new `best.pt` over the engine's weights and keeps the
 previous file as a backup. A model that scores lower than the deployed
 one shows a red warning and needs a confirmation tick before the button
-works. After a replacement the section says when it was installed, and
-the pipeline must be restarted to load the new weights.
+works. After a replacement the section says when it was installed; the
+pipeline reloads the weights on its next frame, no restart needed.
 
-### Crop region per camera
+### Crop regions page
 
-The last section of the page replaces the Colab cell for marking a
-camera's inference region. Pick the camera (or type a new id), upload a
-frame or take the latest raw frame of that camera, and click the
-corners of the area on the picture: two clicks make a rectangle, more
-clicks a polygon. The saved region is drawn in blue, your new points in
-red, and a preview shows exactly what the cropper will feed the model.
-**Save region to config** writes the polygon, in full-image pixels,
-into `app/processing/Image_cropper/config/image_crop_config.yaml` for
-that camera and leaves the other cameras untouched.
+The **Crop regions** page replaces the Colab cell for marking a
+camera's inference regions. Pick the camera (or type a new id), upload
+a frame or take the latest raw frame of that camera, and click the
+corners of an area on the picture: two clicks make a rectangle, more
+clicks a polygon. A camera can have any number of crops, each with one
+of three labels:
+
+- `person detection` (green): where people are detected.
+- `safety` (amber): a safety zone.
+- `priority` (blue): a priority zone.
+
+The model sees the union of the drawn crops, whatever their label;
+everything outside them is blacked out before inference, so there is
+no exclude label to draw. With no crop at all the whole frame is used.
+The pipeline does not yet treat safety and priority zones differently
+from the person detection crop.
+
+Under the camera selector, **PPE checked on camera** has one checkbox
+per class (helmet, vest, boots). Untick a class the camera cannot see
+and press **Save PPE checks**: it is written to the same file as
+`disabled_ppe: {"<camera>": [boots]}`, the engine re-reads it on its
+next frame, and from then on that class counts as present on that
+camera, so it is never a violation there. A camera without an entry
+checks all three. Detection itself is unchanged: the boxes are still
+drawn and stored, only the verdict ignores the class.
+
+The excluded part is still written to the file: on every save the page
+computes the frame minus the drawn crops and stores it as one `exclude`
+entry, the black area as a single polygon in whole pixels. When that
+area has a hole (a crop floating in the middle) or several pieces, the
+polygon reaches them through zero-width bridges, a segment there and
+back that no polygon fill paints, so filling the one polygon still
+gives exactly the black area. It is derived, never drawn, and rewritten
+on each save; the cropper ignores it because its mask already blacks
+out everything outside the drawn crops. It is there so the file, and
+any other reader of it, states what is cut out.
+
+The picture is on the left, darkened outside the drawn crops, and the
+controls are on the right. The **Crops** list picks the crop your
+clicks go to (it is drawn thicker, with numbered points), **Label**
+changes its label, and **New crop** / **Delete this crop** add or drop
+one. Under the picture, a preview shows exactly what the cropper will
+feed the model. **Save crops to config** writes every crop of that
+camera, in full-image pixels, into
+`app/processing/Image_cropper/config/image_crop_config.yaml` and
+leaves the other cameras untouched (the button stays off while a crop
+has a single point). The file looks like this:
+
+```yaml
+regions:
+  "12846":
+    crops:
+      - label: person detection
+        polygon:
+          - [7, 1649]
+          - [2548, 1684]
+          - [6905, 1595]
+          - [27, 3894]
+      - label: safety
+        polygon:
+          - [100, 100]
+          - [400, 100]
+          - [400, 300]
+          - [100, 300]
+      - label: exclude
+        polygon:
+          - [0, 0]
+          - [6911, 0]
+          - [6911, 1595]
+          - [7, 1649]
+```
+
+The older form with a single `polygon:` under the camera is still read
+as one person detection crop, and `label: include` or `label: person`
+from earlier saves as `person detection`; the first save from the page
+rewrites the file in the current form. On delivered images the outline
+drawn is the first person detection crop.
 
 No restart is needed: the cropper checks the file's modification time
 before each frame and reloads it when it changed (a half-written or
@@ -301,12 +382,9 @@ One-time setup on the server:
    ```
 
 Then open `https://retrain.yourdomain.com`, log in, and use the two
-buttons. After the Train button installs a new `best.pt`, restart the
-pipeline container so it loads it:
-
-```bash
-docker compose restart app
-```
+buttons. After the replace button installs a new `best.pt`, the
+pipeline container reloads it on its next frame. To confirm, watch
+`docker compose logs -f app` for `PPE model reloaded from ...`.
 
 Training inside the container runs on CPU unless you add GPU
 passthrough to the `retrain-ui` service. For regular retraining, a

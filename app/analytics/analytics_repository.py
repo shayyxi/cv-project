@@ -108,26 +108,29 @@ class AnalyticsRepository:
         )
         self.session.commit()
 
-    def daily_mean_hours(self) -> dict[date, float]:
+    def daily_mean_hours(self) -> dict[tuple[str, date], float]:
         """
-        Mean capture hour (0-23) of person detections per day -
-        the time-of-day feature for risk scoring.
+        Mean capture hour (0-23) of person detections per camera and
+        day, keyed (camera_id, day) - the time-of-day feature for
+        risk scoring.
         """
 
         query = (
             "SELECT "
+            "j.camera_id AS camera_id, "
             "CAST(COALESCE(j.captured_at, j.downloaded_at, j.created_at) AS DATE) AS day, "
             "AVG(EXTRACT(HOUR FROM COALESCE(j.captured_at, j.downloaded_at, j.created_at))) AS mean_hour "
             "FROM detections d "
             "JOIN image_jobs j ON j.id = d.image_job_id "
             "WHERE d.label = 'person' "
-            "GROUP BY CAST(COALESCE(j.captured_at, j.downloaded_at, j.created_at) AS DATE)"
+            "GROUP BY j.camera_id, "
+            "CAST(COALESCE(j.captured_at, j.downloaded_at, j.created_at) AS DATE)"
         )
 
         rows = self.session.execute(text(query))
 
         return {
-            row["day"]: float(row["mean_hour"])
+            (str(row["camera_id"]), row["day"]): float(row["mean_hour"])
             for row in rows.mappings()
         }
 

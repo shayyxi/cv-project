@@ -271,6 +271,39 @@ def test_split_assignment_is_deterministic(tmp_path) -> None:
     assert all(call["split"] == "valid" for call in project.calls)
 
 
+def test_list_crops_reports_prelabels_and_upload_state(tmp_path) -> None:
+    queue = tmp_path / "label_queue"
+    _write_queue(queue)
+
+    project = FakeProject()
+    service = _service(queue, project, valid_split_percent=0)
+
+    # Nothing uploaded yet: every crop is pending, labels from the COCO.
+    crops = service.list_crops()
+
+    assert [crop["name"] for crop in crops] == ALL_CROPS
+    assert crops[0]["path"] == queue / CROP_A
+    assert [crop["camera_id"] for crop in crops] == ["12846", "12875", "12990"]
+    assert [crop["labels"] for crop in crops] == [["helmet", "vest"], ["boots"], []]
+    assert [crop["boxes"] for crop in crops] == [2, 1, 0]
+    assert all(crop["uploaded_at"] is None and not crop["duplicate"] for crop in crops)
+    assert all(crop["split"] == "train" for crop in crops)
+    assert not project.uploaded_names()
+
+    # After an upload the manifest marks them; a new crop stays pending.
+    service.upload_new_crops()
+    (queue / CROP_D).write_bytes(b"\xff\xd8fake-jpeg")
+
+    crops = {crop["name"]: crop for crop in service.list_crops()}
+
+    assert crops[CROP_A]["uploaded_at"] is not None
+    assert crops[CROP_D]["uploaded_at"] is None
+    assert crops[CROP_D]["labels"] == []
+
+    # An empty or missing queue is simply empty.
+    assert _service(tmp_path / "missing", project).list_crops() == []
+
+
 def test_camera_id_comes_from_the_file_name() -> None:
     assert RoboflowUploadService.camera_id_for(CROP_A) == "12846"
     assert RoboflowUploadService.camera_id_for("no-underscore.jpg") is None
