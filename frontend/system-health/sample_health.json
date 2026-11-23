@@ -1,0 +1,176 @@
+{
+  "mock": true,
+  "generated_at": "2026-10-13T18:46:00Z",
+  "poll_interval_seconds": 60,
+  "stale_after_seconds": 180,
+  "window_days": 7,
+  "thresholds": {
+    "delayed_factor": 1.5,
+    "down_factor": 3,
+    "down_failures": 3,
+    "disk_warn": 85,
+    "disk_crit": 95
+  },
+  "scheduler": {
+    "running": true,
+    "last_successful_cycle_at": "2026-10-13T18:45:00Z",
+    "last_cycle_ok": true,
+    "last_error": null,
+    "process_started_at": "2026-10-06T07:12:00Z"
+  },
+  "cameras": [
+    {
+      "id": "12846",
+      "name": "Gallion Cam 1",
+      "interval_seconds": 3600,
+      "last_image_at": "2026-10-13T18:42:00Z",
+      "last_processed_at": "2026-10-13T18:43:00Z",
+      "consecutive_failures": 0,
+      "last_error": null,
+      "success_24h": 0.997,
+      "frames_7d": 165,
+      "expected_7d": 168
+    },
+    {
+      "id": "12875",
+      "name": "Gallion Cam 2",
+      "interval_seconds": 1200,
+      "last_image_at": "2026-10-13T18:11:00Z",
+      "last_processed_at": "2026-10-13T18:12:00Z",
+      "consecutive_failures": 2,
+      "last_error": "DownloadError: HTTP 504 from live-image.panomax.com",
+      "success_24h": 0.961,
+      "frames_7d": 471,
+      "expected_7d": 504
+    },
+    {
+      "id": "12990",
+      "name": "Gallion Cam 3",
+      "interval_seconds": 3600,
+      "last_image_at": "2026-10-13T18:40:00Z",
+      "last_processed_at": "2026-10-13T18:41:00Z",
+      "consecutive_failures": 0,
+      "last_error": null,
+      "success_24h": 0.984,
+      "frames_7d": 166,
+      "expected_7d": 168
+    }
+  ],
+  "uptime": 0.998,
+  "processing": {
+    "completed": 1816,
+    "failed": 26,
+    "pending": 4,
+    "oldest_pending_seconds": 420,
+    "success_rate": 0.986,
+    "workers_per_image": 3.1,
+    "p50_ms": 14100,
+    "p95_ms": 26400
+  },
+  "delivery": {
+    "delivered": 842,
+    "failed": 33,
+    "skipped": 967,
+    "success_rate": 0.962,
+    "p95_latency_ms": 1800,
+    "http": {
+      "422": 6,
+      "429": 2,
+      "5xx": 1,
+      "4xx": 0
+    }
+  },
+  "latency_days": [
+    {
+      "day": "2026-10-07",
+      "p50_ms": 13000,
+      "p95_ms": 22000,
+      "count": 258
+    },
+    {
+      "day": "2026-10-08",
+      "p50_ms": 15000,
+      "p95_ms": 27000,
+      "count": 262
+    },
+    {
+      "day": "2026-10-09",
+      "p50_ms": 14000,
+      "p95_ms": 25000,
+      "count": 260
+    },
+    {
+      "day": "2026-10-10",
+      "p50_ms": 18000,
+      "p95_ms": 34000,
+      "count": 255
+    },
+    {
+      "day": "2026-10-11",
+      "p50_ms": 15000,
+      "p95_ms": 29000,
+      "count": 263
+    },
+    {
+      "day": "2026-10-12",
+      "p50_ms": 13000,
+      "p95_ms": 24000,
+      "count": 259
+    },
+    {
+      "day": "2026-10-13",
+      "p50_ms": 14000,
+      "p95_ms": 26000,
+      "count": 245
+    }
+  ],
+  "failures": [
+    {
+      "at": "2026-10-13T18:31:00Z",
+      "kind": "delivery",
+      "camera_id": "12875",
+      "http_status": 422,
+      "message": "WordPress rejected delivery status=422 body={\"code\":\"rest_invalid_param\",\"message\":\"Invalid parameter(s): metadata\"}"
+    },
+    {
+      "at": "2026-10-13T18:27:00Z",
+      "kind": "download",
+      "camera_id": "12875",
+      "http_status": 504,
+      "message": "DownloadError: HTTP 504 from live-image.panomax.com"
+    },
+    {
+      "at": "2026-10-13T17:03:00Z",
+      "kind": "processing",
+      "camera_id": "12990",
+      "http_status": null,
+      "message": "ValidationError: image too small after crop (312x118)"
+    },
+    {
+      "at": "2026-10-13T12:48:00Z",
+      "kind": "delivery",
+      "camera_id": "12846",
+      "http_status": 429,
+      "message": "WordPress delivery failed after retries status=429"
+    },
+    {
+      "at": "2026-10-12T09:15:00Z",
+      "kind": "delivery",
+      "camera_id": "12990",
+      "http_status": 503,
+      "message": "WordPress delivery failed after retries status=503 body=Service Unavailable"
+    }
+  ],
+  "host": {
+    "cpu_percent": 62,
+    "memory_percent": 71,
+    "disk_percent": 78,
+    "disk_total_bytes": 107374182400,
+    "disk_used_bytes": 83751862272
+  },
+  "storage": {
+    "raw_bytes": 13743895347,
+    "processed_bytes": 9019431321,
+    "database_bytes": 1288490188
+  }
+}

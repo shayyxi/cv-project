@@ -25,6 +25,21 @@ from app.utils.smart_crop import smart_crop
 
 logger = logging.getLogger(__name__)
 
+VISION_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "vision_config.yaml"
+
+# A SAHI setting the file leaves out (sahi.default and the camera
+# entries saved from the retraining page) falls back to these; the
+# person confidence falls back to the person model's own threshold.
+SAHI_FALLBACK = {
+    "target_size": 640,
+    "overlap_width": 0.2,
+    "overlap_height": 0.2,
+    "overlap": 0.2,
+    "merge_iou": 0.45,
+    "second_stage_merge_enabled": False,
+    "second_stage_merge_ios": 0.7,
+}
+
 
 class PPEVisionEngine(VisionEngine):
 
@@ -32,6 +47,9 @@ class PPEVisionEngine(VisionEngine):
         torch.backends.mkldnn.enabled = False
         torch.set_num_threads(2)
         self._config = self._load_config()
+        # The per-camera SAHI settings of vision_config.yaml (saved from
+        # the retraining page) are re-read when the file changes.
+        self._vision_config_mtime: float | None = self._vision_config_mtime_on_disk()
         self._device = self._select_device()
 
         self._person_model = None
@@ -173,6 +191,7 @@ class PPEVisionEngine(VisionEngine):
         # Between frames only, so one frame never mixes two models.
         self._reload_ppe_model_if_changed()
         self._reload_disabled_ppe_if_changed()
+        self._reload_sahi_settings_if_changed()
 
         sahi_settings = self._resolve_sahi_settings(camera_id)
         image = self._decode_image(image_bytes)
@@ -181,12 +200,6 @@ class PPEVisionEngine(VisionEngine):
         print("********************************************************")
         print(f"Image dimensions: {image_width}x{image_height}")
         raw_persons = self._detect_persons(image, sahi_settings)
-            #persons = self._merge_persons(
-            #raw_persons,
-            #self._merge_iou,
-        #)
-
-        #persons = self._filter_person_shapes(persons)
         persons = [
             (
                 list(map(int, obj.bbox.to_xyxy())),
@@ -194,6 +207,20 @@ class PPEVisionEngine(VisionEngine):
             )
             for obj in raw_persons
         ]
+
+        # The camera's merge threshold: boxes whose IoU is above it are
+        # one person (the engine's own pass, after SAHI's stitching).
+        persons = self._merge_boxes(persons, float(sahi_settings.get("merge_iou", 0.45)))
+
+        # The camera's optional second merge pass: boxes still
+        # overlapping (intersection over the smaller box) by more than
+        # its threshold become one person.
+        if sahi_settings.get("second_stage_merge_enabled"):
+            persons = self._merge_boxes(
+                persons,
+                float(sahi_settings.get("second_stage_merge_ios", 0.7)),
+                metric=self._ios,
+            )
         detections = []
 
 
@@ -288,11 +315,7 @@ class PPEVisionEngine(VisionEngine):
         Load vision configuration exclusively for this engine.
         """
 
-        config_path = (
-            Path(__file__).resolve().parent
-            / "config"
-            / "vision_config.yaml"
-        )
+        config_path = VISION_CONFIG_PATH
 
         if not config_path.exists():
             raise FileNotFoundError(
@@ -304,7 +327,64 @@ class PPEVisionEngine(VisionEngine):
             encoding="utf-8",
         ) as f:
             return yaml.safe_load(f)
-        
+
+    def _vision_config_mtime_on_disk(self) -> float | None:
+        try:
+            return os.stat(VISION_CONFIG_PATH).st_mtime
+        except OSError:
+            return None
+
+    def _sahi_tables(self, config: dict) -> tuple[dict, dict[str, dict]]:
+        """
+        The default SAHI block, completed with SAHI_FALLBACK and the
+        person model's confidence, and camera id -> its own entry as
+        written (completed per camera by _resolve_sahi_settings).
+        """
+
+        sahi = config.get("sahi") or {}
+        default = {**SAHI_FALLBACK, **(sahi.get("default") or {})}
+        default.setdefault("person_confidence", self._person_confidence)
+        cameras = {
+            str(camera_id): dict(settings or {})
+            for camera_id, settings in (sahi.get("cameras") or {}).items()
+        }
+        return default, cameras
+
+    def _reload_sahi_settings_if_changed(self) -> None:
+        """
+        Re-read the SAHI blocks of vision_config.yaml when the file's
+        modification time has changed, so camera settings saved from
+        the retraining page (or a camera added there) apply from the
+        next frame without a restart. Only the SAHI blocks are re-read:
+        model paths and the other sections still need a restart. A file
+        that fails to read keeps the previous settings.
+        """
+
+        mtime = self._vision_config_mtime_on_disk()
+
+        if mtime is None or mtime == self._vision_config_mtime:
+            return
+
+        try:
+            config = yaml.safe_load(VISION_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+            default, cameras = self._sahi_tables(config)
+        except (OSError, yaml.YAMLError, TypeError, ValueError):
+            logger.warning(
+                "Could not read %s - keeping the previous SAHI settings.",
+                VISION_CONFIG_PATH,
+                exc_info=True,
+            )
+            return
+
+        self._sahi_default = default
+        self._sahi_cameras = cameras
+        self._vision_config_mtime = mtime
+
+        logger.info(
+            "SAHI settings reloaded for cameras: %s",
+            ", ".join(sorted(cameras)) or "none",
+        )
+
     def _resolve_sahi_settings(self, camera_id: str) -> dict:
         settings = self._sahi_cameras.get(str(camera_id))
 
@@ -313,7 +393,10 @@ class PPEVisionEngine(VisionEngine):
                 "[SAHI_CONFIG] No settings for camera_id=%s, using default",
                 camera_id,
             )
-            settings = self._sahi_default
+            settings = {}
+
+        # An entry may hold only the keys that differ from the default.
+        settings = {**self._sahi_default, **settings}
 
         if settings["person_confidence"] < self._person_confidence:
             logger.warning(
@@ -361,13 +444,7 @@ class PPEVisionEngine(VisionEngine):
             ppe.get("min_person_overlap", 0.3)
         )
 
-        sahi = self._config["sahi"]
-
-        self._sahi_default = sahi["default"]
-        self._sahi_cameras = {
-            str(camera_id): settings
-            for camera_id, settings in sahi.get("cameras", {}).items()
-        }
+        self._sahi_default, self._sahi_cameras = self._sahi_tables(self._config)
 
     
         crop = self._config["crop"]
@@ -496,10 +573,16 @@ class PPEVisionEngine(VisionEngine):
             self._person_model,
             slice_height=slice_height,
             slice_width=slice_width,
-            overlap_height_ratio=sahi_settings["overlap"],
-            overlap_width_ratio=sahi_settings["overlap"],
+            overlap_height_ratio=float(
+                sahi_settings.get("overlap_height", sahi_settings["overlap"])
+            ),
+            overlap_width_ratio=float(
+                sahi_settings.get("overlap_width", sahi_settings["overlap"])
+            ),
             perform_standard_pred=False,
-
+            # Boxes from neighbouring tiles are stitched here at a fixed,
+            # tuned overlap; the camera's merge threshold (merge_iou) is
+            # applied afterwards by _merge_boxes in process_image.
             postprocess_type="GREEDYNMM",
             postprocess_match_metric="IOS",
             postprocess_match_threshold=0.15,
@@ -512,30 +595,23 @@ class PPEVisionEngine(VisionEngine):
         ]
         return preds 
     
-    def _merge_persons(
+    def _merge_boxes(
         self,
         persons,
-        iou_thresh: float,
+        threshold: float,
+        metric=None,
     ):
+        """
+        Greedy merge of (xyxy, score) person boxes: starting from the
+        best score, every other box whose overlap with it (by `metric`,
+        IoU unless given) is above the threshold is folded into one box
+        spanning both, keeping the best score. The second merge pass of
+        the camera settings runs this with intersection over the smaller
+        box.
+        """
 
-        boxes = []
-
-        for obj in persons:
-
-            x1, y1, x2, y2 = map(
-                int,
-                obj.bbox.to_xyxy(),
-            )
-
-            boxes.append(
-                [
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                    float(obj.score.value),
-                ]
-            )
+        metric = metric or self._iou
+        boxes = [[*map(int, bbox), float(score)] for bbox, score in persons]
 
         boxes.sort(
             key=lambda box: box[4],
@@ -560,10 +636,7 @@ class PPEVisionEngine(VisionEngine):
                 if used[j]:
                     continue
 
-                if self._iou(
-                    bbox,
-                    boxes[j][:4],
-                ) > iou_thresh:
+                if metric(bbox, boxes[j][:4]) > threshold:
 
                     other = boxes[j][:4]
 
@@ -623,6 +696,29 @@ class PPEVisionEngine(VisionEngine):
 
         return intersection / (
             area_a + area_b - intersection
+        )
+
+    @staticmethod
+    def _ios(a, b) -> float:
+        """Intersection over the smaller box: 1.0 when one box lies inside the other."""
+
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+
+        iw = max(0, min(ax2, bx2) - max(ax1, bx1))
+        ih = max(0, min(ay2, by2) - max(ay1, by1))
+        intersection = iw * ih
+
+        if intersection <= 0:
+            return 0.0
+
+        smaller = min(
+            max(1, (ax2 - ax1) * (ay2 - ay1)),
+            max(1, (bx2 - bx1) * (by2 - by1)),
+        )
+
+        return intersection / (
+            smaller
         )
 
 

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- A table drawn exactly as on the design page (docs/design/ppe-review-dashboard.html):
+     uppercase headers, result pills, PPE tags, compliance bars. The page passes the rows
+     as HTML; a click on a row sends its index back to the page. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap">
+<style>
+:root{--font:Montserrat,system-ui,sans-serif;--ink:#fff;--ink2:#d9d9d9;--ink3:#b3b3b3;--line:rgba(255,255,255,.13);
+  --sf2:#272727;--hover:rgba(255,255,255,.07);--ok:#8ac646;--oktx:#8ac646;--bad:#ef6b64;--badtx:#f28b8b;--trk:#2f2f2f}
+body.light{--ink:#141920;--ink2:#333a46;--ink3:#6b7382;--line:#c9ccd3;--sf2:#f2f3f6;--hover:rgba(0,0,0,.05);
+  --ok:#6d9b3a;--oktx:#45701b;--bad:#d13f38;--badtx:#a12a24;--trk:#e4e7ec}
+html,body{margin:0;background:transparent;color:var(--ink);font:13px/1.45 var(--font)}
+.tbl{overflow:auto}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);text-align:left;padding:8px 10px;
+  border-bottom:1px solid var(--line);white-space:nowrap;font-weight:700}
+td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap}
+th.num,td.num{text-align:right}
+tr[data-i]{cursor:pointer}tr[data-i]:hover td{background:var(--hover)}
+tr[data-i]:focus-visible{outline:2px solid var(--ok);outline-offset:-2px}
+.d{color:var(--ink3);font-size:12px;margin-right:6px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:700;
+  border:1px solid var(--line)}
+.pill.ok .i{color:var(--oktx)}.pill.viol .i{color:var(--badtx)}.pill.unk .i{color:var(--ink3)}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:3px;background:var(--sf2);
+  margin-right:4px;color:var(--ink)}
+.track{display:inline-block;width:110px;height:6px;border-radius:3px;background:var(--trk);vertical-align:middle;overflow:hidden}
+.track i{display:block;height:100%}
+.rate{font-weight:800;display:inline-block;width:48px}.rate.bad{color:var(--badtx)}.rate.ok{color:var(--oktx)}
+</style>
+</head>
+<body>
+<div id="root" class="tbl"></div>
+<script>
+(function () {
+  'use strict';
+  var root = document.getElementById('root'), clicks = 0;
+  function send(type, extra) {
+    var message = { type: type, isStreamlitMessage: true };
+    for (var key in extra) message[key] = extra[key];
+    window.parent.postMessage(message, '*');
+  }
+  function height() { send('streamlit:setFrameHeight', { height: document.documentElement.scrollHeight }); }
+  window.addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.type !== 'streamlit:render') return;
+    var args = data.args || {};
+    document.body.className = args.light ? 'light' : '';
+    root.innerHTML = args.html || '';
+    root.querySelectorAll('tr[data-i]').forEach(function (row) {
+      row.tabIndex = 0;
+      var open = function () {
+        clicks += 1;
+        send('streamlit:setComponentValue', { value: { row: +row.dataset.i, n: clicks }, dataType: 'json' });
+      };
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+    });
+    height();
+    setTimeout(height, 150);
+    setTimeout(height, 600);
+  });
+  window.addEventListener('resize', height);
+  send('streamlit:componentReady', { apiVersion: 1 });
+})();
+</script>
+</body>
+</html>

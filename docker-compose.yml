@@ -56,8 +56,11 @@ services:
       # Crop regions saved from the retrain-ui page land here; the
       # cropper re-reads the file when it changes, no restart needed.
       - ./app/processing/Image_cropper/config:/app/app/processing/Image_cropper/config:ro
+      # Per-camera settings saved from the retrain-ui page land here;
+      # the engine re-reads the file when it changes, no restart needed.
+      - ./app/processing/cv/config:/app/app/processing/cv/config:ro
 
-  # Streamlit page with the Upload / Train buttons (scripts/retrain_ui.py).
+  # Streamlit page with the Upload / Train buttons (frontend/retraining/retrain_ui.py).
   # Not published on a host port: Caddy below is the only way in.
   retrain-ui:
     build:
@@ -81,9 +84,11 @@ services:
       - ./app/processing/cv/weights:/app/app/processing/cv/weights
       # Read-write: the crop-region marker saves image_crop_config.yaml here.
       - ./app/processing/Image_cropper/config:/app/app/processing/Image_cropper/config
+      # Read-write: the camera settings panel saves vision_config.yaml here.
+      - ./app/processing/cv/config:/app/app/processing/cv/config
 
     command: >
-      python -m streamlit run scripts/retrain_ui.py
+      python -m streamlit run frontend/retraining/retrain_ui.py
       --server.address 0.0.0.0
       --server.port 8501
       --server.headless true
